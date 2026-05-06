@@ -80,6 +80,7 @@ Built on **AWS Bedrock** (Claude 3 Sonnet) with a **LangGraph** multi-agent orch
 ## Key Features
 
 ### 🤖 Multi-Agent Orchestration (LangGraph)
+
 - **Supervisor Agent** — Orchestrates the full pipeline, handles exceptions
 - **Intake Agent** — Document parsing, PII detection, normalization
 - **Classifier Agent** — Type, sensitivity, urgency classification via Bedrock
@@ -87,17 +88,19 @@ Built on **AWS Bedrock** (Claude 3 Sonnet) with a **LangGraph** multi-agent orch
 - **Auditor Agent** — Compliance logging, evidence collection for FedRAMP
 
 ### 🏛️ Federal Document Types Supported
-| Type | Example | Default Routing |
-|------|---------|-----------------|
-| Contract/Procurement | SOW, RFP, TO | Contracting Officer |
-| Legal/FOIA | FOIA Request, Subpoena | Legal Counsel |
-| Policy/Memo | Directive, SOP, Policy | Policy Office |
-| Incident Report | Security incident, breach | ISSO/Security Team |
-| Personnel Action | Hire, Term, Transfer | HR/People Office |
-| Financial | Invoice, Budget Request, Travel | Finance Office |
-| Executive Correspondence | Congressional, Press | Chief of Staff |
+
+| Type                     | Example                         | Default Routing     |
+| ------------------------ | ------------------------------- | ------------------- |
+| Contract/Procurement     | SOW, RFP, TO                    | Contracting Officer |
+| Legal/FOIA               | FOIA Request, Subpoena          | Legal Counsel       |
+| Policy/Memo              | Directive, SOP, Policy          | Policy Office       |
+| Incident Report          | Security incident, breach       | ISSO/Security Team  |
+| Personnel Action         | Hire, Term, Transfer            | HR/People Office    |
+| Financial                | Invoice, Budget Request, Travel | Finance Office      |
+| Executive Correspondence | Congressional, Press            | Chief of Staff      |
 
 ### 🔐 Security & Compliance
+
 - FedRAMP Moderate authorization path (see [FEDRAMP-ALIGNMENT.md](FEDRAMP-ALIGNMENT.md))
 - All decisions logged with full audit trail (CloudTrail + DynamoDB)
 - PII redacted before AI processing (AWS Comprehend)
@@ -110,6 +113,7 @@ Built on **AWS Bedrock** (Claude 3 Sonnet) with a **LangGraph** multi-agent orch
 ## Quick Start
 
 ### Prerequisites
+
 - Python 3.11+
 - AWS CLI configured (or GovCloud profile)
 - AWS Bedrock access (Claude 3 Sonnet model)
@@ -235,23 +239,23 @@ federal-doc-triage-agent/
 
 This repository is part of a comprehensive federal IT capability portfolio:
 
-| Showcase Project | Repository | Description |
-|---|---|---|
-| **Secure RAG Pipeline** | [Secure-Generative-AI-Platform-on-AWS](https://github.com/dbsectrainer/Secure-Generative-AI-Platform-on-AWS) | AWS Bedrock + RAG with FedRAMP High alignment |
-| **DevSecOps CI/CD** | [dod-cybersec-ops-framework](https://github.com/dbsectrainer/dod-cybersec-ops-framework) | DoD 8570 / NIST RMF aligned pipeline |
-| **Zero Trust Architecture** | [AEGIS](https://github.com/dbsectrainer/AEGIS) | FedRAMP High + NIST 800-207 Zero Trust |
-| **FedRAMP Control Automation** | [nist_800_53_scanner](https://github.com/dbsectrainer/nist_800_53_scanner) | NIST 800-53 Rev 5 compliance scanner |
-| **Federal AI Governance** | [ai-safety-governance](https://github.com/dbsectrainer/ai-safety-governance) | EO 14110 / OMB M-24-10 aligned |
-| **CMMC 2.0 Dashboard** | [integrated-cyber-risk-compliance](https://github.com/dbsectrainer/integrated-cyber-risk-compliance) | CMMC 2.0 readiness assessment |
-| **FedRAMP 30-Day Guide** | [cloud-security-best-practices](https://github.com/dbsectrainer/cloud-security-best-practices) | Day-by-day FedRAMP implementation roadmap |
-| **Agentic AI Workflow** | **[federal-doc-triage-agent](https://github.com/dbsectrainer/federal-doc-triage-agent)** | **This repo** |
+| Showcase Project               | Repository                                                                                                   | Description                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| **Secure RAG Pipeline**        | [Secure-Generative-AI-Platform-on-AWS](https://github.com/dbsectrainer/Secure-Generative-AI-Platform-on-AWS) | AWS Bedrock + RAG with FedRAMP High alignment |
+| **DevSecOps CI/CD**            | [dod-cybersec-ops-framework](https://github.com/dbsectrainer/dod-cybersec-ops-framework)                     | DoD 8570 / NIST RMF aligned pipeline          |
+| **Zero Trust Architecture**    | [AEGIS](https://github.com/dbsectrainer/AEGIS)                                                               | FedRAMP High + NIST 800-207 Zero Trust        |
+| **FedRAMP Control Automation** | [nist_800_53_scanner](https://github.com/dbsectrainer/nist_800_53_scanner)                                   | NIST 800-53 Rev 5 compliance scanner          |
+| **Federal AI Governance**      | [ai-safety-governance](https://github.com/dbsectrainer/ai-safety-governance)                                 | EO 14110 / OMB M-24-10 aligned                |
+| **CMMC 2.0 Dashboard**         | [integrated-cyber-risk-compliance](https://github.com/dbsectrainer/integrated-cyber-risk-compliance)         | CMMC 2.0 readiness assessment                 |
+| **FedRAMP 30-Day Guide**       | [cloud-security-best-practices](https://github.com/dbsectrainer/cloud-security-best-practices)               | Day-by-day FedRAMP implementation roadmap     |
+| **Agentic AI Workflow**        | **[federal-doc-triage-agent](https://github.com/dbsectrainer/federal-doc-triage-agent)**                     | **This repo**                                 |
 
 ---
 
 ## Author
 
 **Donnivis Baker** — [github.com/dbsectrainer](https://github.com/dbsectrainer)  
-**BE EASY ENTERPRISES** — Federal IT Modernization & Cybersecurity  
+**BE EASY ENTERPRISES** — Federal IT Modernization & Cybersecurity
 
 For questions, partnerships, or federal engagement inquiries, open an issue or reach out directly.
 
