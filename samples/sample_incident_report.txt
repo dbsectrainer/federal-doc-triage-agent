@@ -1,0 +1,99 @@
+SECURITY INCIDENT REPORT
+
+CLASSIFICATION: Controlled Unclassified Information (CUI)
+INCIDENT ID: INC-2026-0847
+REPORT DATE: May 6, 2026
+REPORTING AGENCY: Federal Agency XYZ - Information Security Office
+
+1. INCIDENT SUMMARY
+
+On May 3, 2026, at 14:35 UTC, the Federal Agency XYZ Security Operations Center detected unauthorized access attempts against the production Kubernetes cluster in AWS GovCloud (us-gov-west-1). The incident was contained within 2 hours.
+
+SEVERITY LEVEL: HIGH (NIST SP 800-61 Classification)
+IMPACT: 0 systems compromised, 0 data exfiltrated, 0 users affected
+
+2. INCIDENT TIMELINE
+
+14:35 UTC - GuardDuty alert: Suspicious API calls from unknown IP (203.0.113.45)
+14:38 UTC - Security team notified via automated alert
+14:42 UTC - Initial investigation: Compromised IAM access key detected
+14:45 UTC - Incident commander activated, escalation initiated
+15:02 UTC - Compromised key revoked, access logs reviewed
+15:15 UTC - Root cause analysis: Contractor left access key in misconfigured S3 bucket
+15:30 UTC - All affected systems isolated pending forensic review
+16:15 UTC - System Security Plan updated with incident response
+16:45 UTC - CloudTrail logs exported for federal auditors
+
+3. ROOT CAUSE ANALYSIS
+
+The incident was caused by improper credential management:
+- Contractor CloudSecure Federal Solutions stored API keys in environment variable in Dockerfile
+- Docker image was pushed to private ECR repository
+- Repository misconfigured to allow read access via overly-permissive IAM policy
+- External attacker accessed key and attempted to deploy malicious workloads
+
+4. FORENSIC FINDINGS
+
+Forensic Timeline:
+- Attacker gained access to ECR at 2026-05-03 13:55 UTC
+- Attacker created 3 test pods in staging namespace (observed 2026-05-03 14:32 UTC)
+- Pods successfully isolated before reaching production
+- No persistent backdoors detected
+- No data accessed during reconnaissance phase
+
+5. REMEDIATION ACTIONS
+
+Immediate (Completed):
+☓ Revoke compromised IAM access key
+☓ Isolate affected systems
+☓ Rotate all contractor credentials
+☓ Audit all container images in ECR for embedded secrets
+
+Short-term (In Progress):
+☐ Implement secrets detection in CI/CD pipeline (detect-secrets integration)
+☐ Deploy Cosign image signing for all production deployments
+☐ Enable AWS ECR image scanning with Grype
+☐ Conduct security training with contractor (Contractor Point of Contact: james.rodriguez@cloudsecurefed.com, (703) 555-0147)
+
+Long-term (Planned):
+☐ Migrate to AWS Secrets Manager for all credential storage
+☐ Implement Pod Security Policies in Kubernetes
+☐ Establish contractor security onboarding certification
+☐ Quarterly infrastructure security audits
+
+6. IMPACT ASSESSMENT
+
+CONFIDENTIALITY: None (no data exposed)
+INTEGRITY: None (no systems altered)
+AVAILABILITY: None (no downtime occurred)
+
+NIST 800-53 CONTROLS ADDRESSED:
+- SI-4 (Information System Monitoring) - Effective
+- AC-2 (Account Management) - Partial (contractor credential handling needs improvement)
+- SC-7 (Boundary Protection) - Effective
+- AU-12 (Audit Generation) - Effective
+
+7. FEDERAL NOTIFICATION REQUIREMENTS
+
+☓ US-CERT notified at 16:00 UTC via secure channel
+☓ Agency leadership briefed
+☓ Relevant oversight committee (HQ Information Security) to be briefed May 7, 2026
+☐ OMB incident report submission (if required per OMB M-24-10)
+
+8. LESSONS LEARNED
+
+1. Contractors must complete secure development training before code access
+2. Automated secrets detection in CI/CD would have prevented this incident
+3. ECR repository IAM policies need tighter default restrictions
+4. Enhanced monitoring for ECR access patterns is warranted
+
+9. SIGN-OFF
+
+Incident Commander: Jennifer Liu, CISO
+Federal Agency XYZ
+(202) 555-0145
+j.liu@agencyxyz.gov
+
+Date: May 6, 2026
+
+This incident report is OFFICIAL USE ONLY and must be handled in accordance with the National Archives and Records Administration (NARA) records retention schedule.

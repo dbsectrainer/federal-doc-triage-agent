@@ -1,0 +1,58 @@
+FREEDOM OF INFORMATION ACT REQUEST
+
+TO: U.S. Department of Justice
+    Office of Information Policy
+    Suite 11050, 1425 New York Avenue, NW
+    Washington, DC 20530-0001
+
+DATE: May 6, 2026
+
+RE: Freedom of Information Act Request
+
+Dear Freedom of Information Officer:
+
+Pursuant to the Freedom of Information Act, 5 U.S.C. § 552, I am requesting access to the following documents:
+
+1. All emails between employees in the Cybersecurity Division and external contractors regarding cloud infrastructure projects from January 1, 2025 to December 31, 2025.
+
+2. Budget justifications and cost analyses for FedRAMP authorization activities conducted in 2025-2026.
+
+3. Internal memos regarding the implementation of NIST 800-53 Moderate baseline controls at [AGENCY].
+
+4. Meeting minutes from the Chief Information Security Officer's office related to Zero Trust Architecture adoption, dated from January 2025 forward.
+
+DESCRIPTION OF RECORDS SOUGHT:
+
+I am researching federal cloud security compliance practices and the implementation of FedRAMP requirements across federal agencies. These documents will help me understand how agencies are managing security certifications and authorizations for cloud services.
+
+REQUESTER INFORMATION:
+
+Name: Sarah Mitchell
+Email: s.mitchell@research.gov
+Phone: (202) 555-0198
+Organization: Federal Compliance Research Institute
+Address: 1000 K Street, NW, Suite 500, Washington, DC 20005
+
+ESTIMATED SEARCH SCOPE:
+
+I understand this request may require extensive search and review. I am willing to pay reasonable duplication costs up to $500. Please contact me if the search is expected to exceed this amount.
+
+REQUEST FOR EXPEDITED PROCESSING:
+
+I respectfully request expedited processing of this FOIA request as this information relates to public interest regarding federal cybersecurity compliance.
+
+REQUEST FOR FEE WAIVER:
+
+I request that fees for this request be waived or reduced as the disclosure of the requested documents is in the public interest and will primarily benefit the general public rather than a commercial interest.
+
+Thank you for your attention to this request. Please contact me if you need clarification or additional information.
+
+Respectfully,
+
+Sarah Mitchell
+Federal Compliance Research Institute
+(202) 555-0198
+s.mitchell@research.gov
+
+---
+REQUEST TRACKING: This FOIA request should be processed within 20 business days per FOIA statute.
