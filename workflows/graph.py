@@ -36,19 +36,60 @@ def build_triage_graph():
     graph.add_node("escalation", escalation_node)
     graph.add_node("audit", audit_node)
 
-    # Define edges (state transitions)
-    graph.add_edge("intake", "classify")
-    graph.add_edge("classify", "route")
-    graph.add_edge("route", "approval")
+    # Define conditional edges for error retry and normal flow
+    def intake_router(state):
+        """Route from intake: retry on error or proceed to classify."""
+        max_retries = 3
+        if state.get("error") and state.get("retry_count", 0) < max_retries:
+            return "intake"
+        else:
+            return "classify"
 
-    # Approval can go to escalation or audit based on approval status
+    def classify_router(state):
+        """Route from classify: retry on error or proceed to route."""
+        max_retries = 3
+        if state.get("error") and state.get("retry_count", 0) < max_retries:
+            return "classify"
+        else:
+            return "route"
+
+    def route_router(state):
+        """Route from route: retry on error or proceed to approval."""
+        max_retries = 3
+        if state.get("error") and state.get("retry_count", 0) < max_retries:
+            return "route"
+        else:
+            return "approval"
+
+    # Add conditional edges with retry logic
+    graph.add_conditional_edges(
+        "intake",
+        intake_router,
+    )
+    graph.add_conditional_edges(
+        "classify",
+        classify_router,
+    )
+    graph.add_conditional_edges(
+        "route",
+        route_router,
+    )
+
+    # Approval can go to escalation (for IN_REVIEW) or audit (for APPROVED/REJECTED)
+    def approval_routing(state):
+        """Route based on approval status.
+
+        - IN_REVIEW documents go to escalation for SLA monitoring
+        - APPROVED, REJECTED, DELEGATED documents go directly to audit
+        """
+        if state["approval_status"] == ApprovalStatus.IN_REVIEW:
+            return "escalation"
+        else:
+            return "audit"
+
     graph.add_conditional_edges(
         "approval",
-        lambda state: (
-            "escalation"
-            if state["approval_status"] in (ApprovalStatus.PENDING, ApprovalStatus.IN_REVIEW)
-            else "audit"
-        ),
+        approval_routing,
     )
 
     # Escalation always leads to audit

@@ -1,7 +1,6 @@
 """Router agent for rule-based document routing."""
 
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import datetime, timedelta, timezone
 
 from workflows.state import (
     DocumentType,
@@ -66,6 +65,15 @@ class RouterAgent:
             RoutingQueue.LEGAL_COUNSEL,
             RoutingQueue.CHIEF_OF_STAFF,
         ),
+        # SBU (Sensitive But Unclassified) documents require security team review
+        (DocumentType.UNKNOWN, SensitivityLevel.SENSITIVE_BUT_UNCLASSIFIED): (
+            RoutingQueue.SECURITY_TEAM,
+            RoutingQueue.LEGAL_COUNSEL,
+        ),
+        (DocumentType.INCIDENT_REPORT, SensitivityLevel.SENSITIVE_BUT_UNCLASSIFIED): (
+            RoutingQueue.SECURITY_TEAM,
+            RoutingQueue.LEGAL_COUNSEL,
+        ),
     }
 
     # Default routing for unmatched combinations
@@ -106,7 +114,7 @@ class RouterAgent:
 
         # Calculate SLA deadline
         sla_offset = self.sla_mapping.get(classification["urgency"], timedelta(days=10))
-        sla_deadline = (datetime.utcnow() + sla_offset).isoformat()
+        sla_deadline = (datetime.now(timezone.utc) + sla_offset).isoformat()
 
         return RoutingDecision(
             primary_queue=primary_queue,
@@ -135,4 +143,4 @@ class RouterAgent:
     def get_sla_deadline(self, urgency: Urgency) -> str:
         """Get SLA deadline offset from now."""
         sla_offset = self.sla_mapping.get(urgency, timedelta(days=10))
-        return (datetime.utcnow() + sla_offset).isoformat()
+        return (datetime.now(timezone.utc) + sla_offset).isoformat()

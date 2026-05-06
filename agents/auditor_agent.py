@@ -2,17 +2,22 @@
 
 import json
 import uuid
-from datetime import datetime
+import logging
+import boto3
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from workflows.state import AuditEvent
+
+logger = logging.getLogger(__name__)
 
 
 class AuditorAgent:
     """Handles compliance logging and audit trail creation for FISMA/FedRAMP."""
 
-    def __init__(self):
+    def __init__(self, region: str = "us-gov-west-1"):
         self.audit_events = []
+        self.dynamodb = boto3.resource("dynamodb", region_name=region)
 
     def log_event(
         self,
@@ -35,7 +40,7 @@ class AuditorAgent:
         """
         event = AuditEvent(
             event_id=str(uuid.uuid4()),
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             event_type="WORKFLOW_ACTION",
             agent=agent,
             action=action,
@@ -153,6 +158,55 @@ class AuditorAgent:
     def export_audit_trail_json(self) -> str:
         """Export audit trail as JSON for CloudTrail / DynamoDB storage."""
         return json.dumps(self.audit_events, default=str, indent=2)
+
+    def persist_to_dynamodb(self, table_name: str, events: list = None) -> bool:
+        """
+        Persist audit events to DynamoDB for long-term compliance tracking.
+
+        Args:
+            table_name: DynamoDB table name
+            events: Events to persist (defaults to all audit_events)
+
+        Returns:
+            True if persistence succeeded, False otherwise
+        """
+        try:
+            if events is None:
+                events = self.audit_events
+
+            if not events:
+                logger.warning("No events to persist to DynamoDB")
+                return True
+
+            table = self.dynamodb.Table(table_name)
+
+            # Batch write items (max 25 per request)
+            with table.batch_writer() as batch:
+                for event in events:
+                    # Ensure event_id is string (partition key)
+                    item = {
+                        "event_id": event["event_id"],
+                        "timestamp": event["timestamp"],
+                        "event_type": event["event_type"],
+                        "agent": event["agent"],
+                        "action": event["action"],
+                        "outcome": event["outcome"],
+                        "metadata": json.dumps(event["metadata"], default=str),
+                    }
+                    batch.put_item(Item=item)
+
+            logger.info(
+                "Persisted %d audit events to DynamoDB table %s",
+                len(events),
+                table_name,
+            )
+            return True
+
+        except Exception as e:
+            logger.error(
+                "Failed to persist audit events to DynamoDB: %s", str(e)
+            )
+            return False
 
     def clear_audit_trail(self):
         """Clear in-memory audit trail (should be persisted before clearing)."""

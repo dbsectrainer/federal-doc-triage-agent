@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import TypedDict, Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class DocumentType(str, Enum):
@@ -59,6 +59,7 @@ class PIIDetection(TypedDict):
     entity_types: List[str]
     entity_count: int
     redaction_applied: bool
+    detected_entities: List[Dict[str, Any]]  # List of {text, type, start, end}
 
 
 class ClassificationResult(TypedDict):
@@ -138,7 +139,7 @@ def initial_state(document_id: str, s3_key: str, content: str) -> TriageState:
         document_s3_key=s3_key,
         document_content=content,
         document_content_redacted="",
-        intake_timestamp=datetime.utcnow().isoformat(),
+        intake_timestamp=datetime.now(timezone.utc).isoformat(),
         pii_detection=None,
         classification=None,
         routing=None,

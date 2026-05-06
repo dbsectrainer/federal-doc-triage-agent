@@ -1,7 +1,7 @@
 """Tests for router agent."""
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from agents.router_agent import RouterAgent
 from workflows.state import (
@@ -106,23 +106,25 @@ def test_sla_deadline_calculation(router):
     # Test routine (10 days)
     routine_sla = router.get_sla_deadline(Urgency.ROUTINE)
     routine_deadline = datetime.fromisoformat(routine_sla)
-    assert (routine_deadline - datetime.utcnow()).days == 10
+    days_remaining = (routine_deadline - datetime.now(timezone.utc)).total_seconds() / 86400
+    assert 9.9 < days_remaining < 10.1
 
     # Test priority (5 days)
     priority_sla = router.get_sla_deadline(Urgency.PRIORITY)
     priority_deadline = datetime.fromisoformat(priority_sla)
-    assert (priority_deadline - datetime.utcnow()).days == 5
+    days_remaining = (priority_deadline - datetime.now(timezone.utc)).total_seconds() / 86400
+    assert 4.9 < days_remaining < 5.1
 
     # Test immediate (24 hours)
     immediate_sla = router.get_sla_deadline(Urgency.IMMEDIATE)
     immediate_deadline = datetime.fromisoformat(immediate_sla)
-    hours_remaining = (immediate_deadline - datetime.utcnow()).total_seconds() / 3600
+    hours_remaining = (immediate_deadline - datetime.now(timezone.utc)).total_seconds() / 3600
     assert 23 < hours_remaining < 25
 
     # Test emergency (4 hours)
     emergency_sla = router.get_sla_deadline(Urgency.EMERGENCY)
     emergency_deadline = datetime.fromisoformat(emergency_sla)
-    hours_remaining = (emergency_deadline - datetime.utcnow()).total_seconds() / 3600
+    hours_remaining = (emergency_deadline - datetime.now(timezone.utc)).total_seconds() / 3600
     assert 3.5 < hours_remaining < 4.5
 
 
