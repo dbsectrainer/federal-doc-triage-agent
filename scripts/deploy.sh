@@ -6,9 +6,32 @@
 set -e
 
 # Configuration
-ENVIRONMENT=${1:-production}
-REGION=${2:-us-gov-west-1}
+ENVIRONMENT=production
+REGION=us-gov-west-1
 PROJECT_NAME="federal-doc-triage-agent"
+
+# Parse arguments (support both named flags and positional args)
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --env)
+            ENVIRONMENT="$2"
+            shift 2
+            ;;
+        --region)
+            REGION="$2"
+            shift 2
+            ;;
+        *)
+            # Handle positional arguments for backward compatibility
+            if [ -z "$ENVIRONMENT" ] || [ "$ENVIRONMENT" = "production" ]; then
+                ENVIRONMENT="$1"
+            elif [ -z "$REGION" ] || [ "$REGION" = "us-gov-west-1" ]; then
+                REGION="$1"
+            fi
+            shift
+            ;;
+    esac
+done
 
 # Colors for output
 RED='\033[0;31m'

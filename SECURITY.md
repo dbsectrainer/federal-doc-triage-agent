@@ -138,14 +138,11 @@ See `FEDRAMP-ALIGNMENT.md` for complete control mapping.
 ### Post-Deployment Verification
 
 ```bash
-# Run NIST 800-53 baseline scan
-./scripts/run_security_scan.sh --framework nist_800_53_moderate
+# Run full test suite with coverage
+pytest tests/ --cov=agents --cov=workflows -v
 
-# Generate compliance report
-python scripts/generate_compliance_report.py --output fedramp_report.html
-
-# Run automated tests
-pytest tests/ -v
+# Perform dependency security audit
+pip-audit
 ```
 
 ---

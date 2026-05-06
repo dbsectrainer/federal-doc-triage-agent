@@ -387,7 +387,7 @@ class TriageState(TypedDict):
 ```python
 if retry_count < 3:
     # Retry with exponential backoff
-    wait_time = 2 ^ retry_count  # 2s, 4s, 8s
+    wait_time = 2 ** retry_count  # 2s, 4s, 8s
     re_invoke_node()
 else:
     # Escalate to manual review

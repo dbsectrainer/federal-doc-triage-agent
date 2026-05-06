@@ -1,8 +1,8 @@
 """Classifier agent using AWS Bedrock to classify federal documents."""
 
 import json
+import re
 import boto3
-from typing import Optional
 
 from workflows.state import (
     DocumentType,
@@ -19,6 +19,35 @@ class ClassifierAgent:
         self.bedrock = boto3.client("bedrock-runtime", region_name=region)
         self.model_id = model_id or "anthropic.claude-3-sonnet-20240229-v1:0"
 
+    @staticmethod
+    def _sanitize_document_id(document_id: str) -> str:
+        """
+        Sanitize document ID to prevent prompt injection.
+
+        Args:
+            document_id: Document ID to sanitize
+
+        Returns:
+            Sanitized document ID (alphanumeric, hyphens, underscores only)
+
+        Raises:
+            ValueError: If document ID cannot be sanitized
+        """
+        if not document_id:
+            raise ValueError("Document ID cannot be empty")
+
+        # Keep only safe characters
+        sanitized = re.sub(r"[^a-zA-Z0-9_-]", "", document_id)
+
+        if not sanitized:
+            raise ValueError("Document ID contains no valid characters")
+
+        # Limit length to prevent abuse
+        if len(sanitized) > 256:
+            sanitized = sanitized[:256]
+
+        return sanitized
+
     def classify_document(
         self, document_id: str, content: str, redacted_content: str
     ) -> ClassificationResult:
@@ -32,7 +61,12 @@ class ClassifierAgent:
 
         Returns:
             ClassificationResult with type, sensitivity, urgency, etc.
+
+        Raises:
+            ValueError: If document_id is invalid or response parsing fails
         """
+        # Sanitize document_id to prevent prompt injection
+        document_id = self._sanitize_document_id(document_id)
 
         prompt = f"""You are a federal document classification expert. Analyze the following document and classify it using the schema provided.
 
@@ -70,20 +104,52 @@ Respond ONLY with the JSON object. No other text."""
             ),
         )
 
-        # Parse response
-        response_body = json.loads(response["body"].read())
-        content_block = response_body["content"][0]
-        classification_json = json.loads(content_block["text"])
+        # Parse response with validation
+        try:
+            response_body = json.loads(response["body"].read())
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse Bedrock response: {str(e)}")
 
-        # Map string enums
+        # Validate response structure
+        if "content" not in response_body or not response_body["content"]:
+            raise ValueError("Bedrock response missing content block")
+
+        content_block = response_body["content"][0]
+
+        # Validate content block type
+        if content_block.get("type") != "text":
+            raise ValueError(f"Unexpected content block type: {content_block.get('type')}")
+
+        # Parse classification JSON
+        try:
+            classification_json = json.loads(content_block["text"])
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse classification JSON: {str(e)}")
+
+        # Map string enums with fallback to UNKNOWN/defaults
+        try:
+            document_type = DocumentType(classification_json.get("document_type", "unknown"))
+        except ValueError:
+            document_type = DocumentType.UNKNOWN
+
+        try:
+            sensitivity_level = SensitivityLevel(classification_json.get("sensitivity_level", "unclassified"))
+        except ValueError:
+            sensitivity_level = SensitivityLevel.UNCLASSIFIED
+
+        try:
+            urgency = Urgency(classification_json.get("urgency", "routine"))
+        except ValueError:
+            urgency = Urgency.ROUTINE
+
         return ClassificationResult(
-            document_type=DocumentType(classification_json["document_type"]),
-            sensitivity_level=SensitivityLevel(classification_json["sensitivity_level"]),
-            urgency=Urgency(classification_json["urgency"]),
-            subject=classification_json["subject"],
-            summary=classification_json["summary"],
-            action_required=classification_json["action_required"],
+            document_type=document_type,
+            sensitivity_level=sensitivity_level,
+            urgency=urgency,
+            subject=classification_json.get("subject", ""),
+            summary=classification_json.get("summary", ""),
+            action_required=classification_json.get("action_required", ""),
             originating_agency=classification_json.get("originating_agency"),
-            keywords=classification_json["keywords"],
-            confidence_score=classification_json["confidence_score"],
+            keywords=classification_json.get("keywords", []),
+            confidence_score=float(classification_json.get("confidence_score", 0.0)),
         )

@@ -81,7 +81,7 @@ docker build -t federal-doc-triage-agent .
 docker run --rm \
   -e AWS_REGION=us-gov-west-1 \
   -e AWS_PROFILE=default \
-  -v ~/.aws:/root/.aws:ro \
+  -v ~/.aws:/home/appuser/.aws:ro \
   federal-doc-triage-agent
 ```
 
@@ -90,7 +90,7 @@ docker run --rm \
 ```bash
 docker run --rm \
   -e AWS_REGION=us-gov-west-1 \
-  -v ~/.aws:/root/.aws:ro \
+  -v ~/.aws:/home/appuser/.aws:ro \
   -v $(pwd)/samples:/app/samples:ro \
   federal-doc-triage-agent \
   python -m agents.demo samples/sample_foia_request.txt

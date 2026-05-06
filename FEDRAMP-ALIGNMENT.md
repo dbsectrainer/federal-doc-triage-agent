@@ -47,7 +47,7 @@ The Federal Document Triage Agent automates federal document intake, classificat
 | ------- | --------------------------------- | ------------------------------------------------- |
 | AC-1    | Access Control Policy             | SECURITY.md, IAM policy framework                 |
 | AC-2    | Account Management                | IAM Identity Center, MFA enforcement              |
-| AC-3    | Access Enforcement                | IAM policies, Kubernetes RBAC                     |
+| AC-3    | Access Enforcement                | IAM policies, security groups                     |
 | AC-4    | Information Flow Enforcement      | VPC security groups, network ACLs                 |
 | AC-5    | Separation of Duties              | Role-based approval workflow                      |
 | AC-6    | Least Privilege                   | Service-scoped IAM roles, Lambda execution roles  |
@@ -113,7 +113,7 @@ The Federal Document Triage Agent automates federal document intake, classificat
 | SC-2     | Application Partitioning                                           | Microservices architecture (Lambda, containers)  |
 | SC-3     | Security Function Isolation                                        | IAM policy isolation, Lambda VPC                 |
 | SC-4     | Information in Shared Resources                                    | EBS encryption, S3 server-side encryption        |
-| SC-5     | Denial of Service Protection                                       | AWS WAF, rate limiting, ALB health checks        |
+| SC-5     | Denial of Service Protection                                       | Rate limiting, security group rules              |
 | SC-7     | Boundary Protection                                                | VPC with private subnets, security groups, NACLs |
 | SC-8     | Transmission Confidentiality                                       | TLS 1.2+ for all traffic, CloudFront HTTPS       |
 | SC-12    | Cryptographic Key Establishment and Management                     | AWS KMS, automatic key rotation                  |
@@ -126,7 +126,7 @@ The Federal Document Triage Agent automates federal document intake, classificat
 | SC-21    | Secure Name / Address Resolution (DNS)                             | Route 53 DNSSEC signing                          |
 | SC-22    | Architecture and Provisioning for Name/Address Resolution Services | Private Route 53 zones                           |
 | SC-23    | Session Authenticity                                               | Cryptographic session IDs via Cognito            |
-| SC-28    | Protection of Information at Rest                                  | KMS encryption on S3, RDS, EBS                   |
+| SC-28    | Protection of Information at Rest                                  | KMS encryption on S3, DynamoDB                   |
 | SC-28(1) | Cryptographic Protection                                           | AES-256-GCM encryption                           |
 | SC-39    | Process Isolation                                                  | Container isolation (Docker), Lambda sandboxing  |
 | SC-40    | Wireless Access                                                    | N/A (no wireless)                                |
@@ -141,8 +141,8 @@ The Federal Document Triage Agent automates federal document intake, classificat
 | ------- | ------------------------------------------------ | -------------------------------------------------- |
 | SI-1    | System and Information Integrity Policy          | SECURITY.md                                        |
 | SI-2    | Flaw Remediation                                 | Automated patching via Lambda, AWS Patch Manager   |
-| SI-3    | Malware Protection                               | AWS GuardDuty, antivirus on images                 |
-| SI-4    | Information System Monitoring                    | CloudWatch, Security Hub, GuardDuty                |
+| SI-3    | Malware Protection                               | CloudWatch container inspection (planned)          |
+| SI-4    | Information System Monitoring                    | CloudWatch, GuardDuty (planned)                    |
 | SI-5    | Security Alerts, Advisories, and Directives      | AWS Security Advisories, SNS notifications         |
 | SI-7    | Software, Firmware, and Information Integrity    | Code signing, artifact verification                |
 | SI-10   | Information System Monitoring - Extraneous Input | Input validation, WAF rules                        |
@@ -183,8 +183,6 @@ AWS GovCloud provides:
 | Resource        | Algorithm           | Key Management              | Compliance   |
 | --------------- | ------------------- | --------------------------- | ------------ |
 | S3 Buckets      | AES-256 (KMS)       | Customer-managed key in KMS | SC-13, SC-28 |
-| RDS Database    | AES-256 (KMS)       | Customer-managed key in KMS | SC-13, SC-28 |
-| EBS Volumes     | AES-256 (KMS)       | Customer-managed key in KMS | SC-13, SC-28 |
 | DynamoDB Tables | AES-256 (AWS-owned) | AWS-managed encryption      | SC-13, SC-28 |
 | Secrets Manager | AES-256 (KMS)       | Customer-managed key        | IA-5, SC-28  |
 
@@ -193,8 +191,7 @@ AWS GovCloud provides:
 | Channel              | Protocol | Cipher Suite                          | Compliance  |
 | -------------------- | -------- | ------------------------------------- | ----------- |
 | API Gateway → Client | TLS 1.2+ | TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 | SC-8, SC-13 |
-| ALB → Lambda         | TLS 1.2+ | TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 | SC-8, SC-13 |
-| Lambda → RDS         | TLS 1.2+ | Database connection encryption        | SC-8, SC-13 |
+| Lambda → DynamoDB    | TLS 1.2+ | AWS VPC endpoint encryption           | SC-8, SC-13 |
 | Lambda → S3          | TLS 1.2+ | HTTPS enforced via bucket policy      | SC-8, SC-13 |
 | CloudFront → S3      | TLS 1.2+ | Origin SSL/TLS                        | SC-8, SC-13 |
 
@@ -238,21 +235,19 @@ All document processing generates audit records:
 ```
 AWS GovCloud (us-gov-west-1)
 ├── VPC (10.0.0.0/16)
-│   ├── Public Subnet (ALB)
 │   ├── Private Subnet (Lambda, API Gateway)
-│   ├── Database Subnet (RDS, encrypted)
+│   ├── Database Subnet (DynamoDB, encrypted)
 │   └── Security Groups (least-privilege)
 ├── AWS Bedrock (Claude 3 Sonnet, encrypted API calls)
 ├── Compute (Lambda, ECS optional)
 ├── Storage
 │   ├── S3 (encryption + Object Lock)
-│   ├── RDS PostgreSQL (encryption + backups)
 │   └── DynamoDB (encryption + backups)
 ├── Logging & Monitoring
 │   ├── CloudTrail (all API calls)
 │   ├── CloudWatch (application logs)
-│   ├── Security Hub (compliance dashboard)
-│   └── GuardDuty (threat detection)
+│   ├── Security Hub (planned)
+│   └── GuardDuty (planned)
 └── Secrets Management (AWS Secrets Manager, auto-rotation)
 ```
 

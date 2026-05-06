@@ -26,7 +26,6 @@ provider "aws" {
       Environment = var.environment
       Project     = "federal-doc-triage-agent"
       ManagedBy   = "Terraform"
-      CreatedAt   = timestamp()
     }
   }
 }
@@ -35,6 +34,7 @@ provider "aws" {
 module "vpc" {
   source = "./modules/vpc"
 
+  project_name          = var.project_name
   vpc_cidr             = var.vpc_cidr
   availability_zones   = var.availability_zones
   public_subnet_cidrs  = var.public_subnet_cidrs
@@ -66,6 +66,15 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "intake_bucket" {
   }
 }
 
+# Versioning for Intake Bucket
+resource "aws_s3_bucket_versioning" "intake_bucket" {
+  bucket = aws_s3_bucket.intake_bucket.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
 # Block Public Access
 resource "aws_s3_bucket_public_access_block" "intake_bucket" {
   bucket = aws_s3_bucket.intake_bucket.id
@@ -78,11 +87,41 @@ resource "aws_s3_bucket_public_access_block" "intake_bucket" {
 
 # Archive Bucket with Object Lock
 resource "aws_s3_bucket" "archive_bucket" {
-  bucket = "${var.project_name}-archive-${data.aws_caller_identity.current.account_id}"
+  bucket              = "${var.project_name}-archive-${data.aws_caller_identity.current.account_id}"
+  object_lock_enabled = true
 
   tags = merge(var.tags, {
     Name = "Document Archive with WORM"
   })
+}
+
+resource "aws_s3_bucket_versioning" "archive_bucket" {
+  bucket = aws_s3_bucket.archive_bucket.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "archive_bucket" {
+  bucket = aws_s3_bucket.archive_bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.s3.arn
+    }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "archive_bucket" {
+  bucket = aws_s3_bucket.archive_bucket.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
 resource "aws_s3_bucket_object_lock_configuration" "archive_bucket" {
@@ -94,6 +133,36 @@ resource "aws_s3_bucket_object_lock_configuration" "archive_bucket" {
       days = 2555  # 7 years per NARA
     }
   }
+
+  depends_on = [aws_s3_bucket_versioning.archive_bucket]
+}
+
+# S3 Bucket Logging Configuration
+resource "aws_s3_bucket_logging" "intake" {
+  bucket = aws_s3_bucket.intake_bucket.id
+
+  target_bucket = aws_s3_bucket.archive_bucket.id
+  target_prefix = "intake-logs/"
+
+  depends_on = [aws_s3_bucket_public_access_block.archive_bucket]
+}
+
+resource "aws_s3_bucket_logging" "archive" {
+  bucket = aws_s3_bucket.archive_bucket.id
+
+  target_bucket = aws_s3_bucket.archive_bucket.id
+  target_prefix = "archive-logs/"
+
+  depends_on = [aws_s3_bucket_public_access_block.archive_bucket]
+}
+
+resource "aws_s3_bucket_logging" "cloudtrail" {
+  bucket = aws_s3_bucket.cloudtrail_bucket.id
+
+  target_bucket = aws_s3_bucket.archive_bucket.id
+  target_prefix = "cloudtrail-logs/"
+
+  depends_on = [aws_s3_bucket_public_access_block.archive_bucket]
 }
 
 # KMS Key for Encryption
@@ -194,6 +263,9 @@ resource "aws_cloudtrail" "main" {
   include_global_service_events = true
   is_multi_region_trail         = true
   enable_log_file_validation    = true
+  kms_key_id                    = aws_kms_key.s3.arn
+  cloud_watch_logs_group_arn    = "${aws_cloudwatch_log_group.cloudtrail_logs.arn}:*"
+  cloud_watch_logs_role_arn     = aws_iam_role.cloudtrail_cloudwatch.arn
   depends_on                    = [aws_s3_bucket_policy.cloudtrail]
 
   event_selector {
@@ -216,6 +288,56 @@ resource "aws_cloudtrail" "main" {
   })
 }
 
+# CloudWatch Log Group for CloudTrail
+resource "aws_cloudwatch_log_group" "cloudtrail_logs" {
+  name              = "/aws/cloudtrail/federal-doc-triage"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = aws_kms_key.s3.arn
+
+  tags = merge(var.tags, { Name = "cloudtrail-logs" })
+}
+
+# IAM Role for CloudTrail to CloudWatch Logs
+resource "aws_iam_role" "cloudtrail_cloudwatch" {
+  name = "${var.project_name}-cloudtrail-cloudwatch"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "cloudtrail.amazonaws.com"
+      }
+    }]
+  })
+
+  tags = merge(var.tags, { Name = "cloudtrail-cloudwatch-role" })
+}
+
+# IAM Policy for CloudTrail to write to CloudWatch Logs
+resource "aws_iam_role_policy" "cloudtrail_cloudwatch" {
+  name = "${var.project_name}-cloudtrail-cloudwatch-policy"
+  role = aws_iam_role.cloudtrail_cloudwatch.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Effect   = "Allow"
+        Resource = [
+          aws_cloudwatch_log_group.cloudtrail_logs.arn,
+          "${aws_cloudwatch_log_group.cloudtrail_logs.arn}:*"
+        ]
+      }
+    ]
+  })
+}
+
 # CloudTrail S3 Bucket
 resource "aws_s3_bucket" "cloudtrail_bucket" {
   bucket = "${var.project_name}-cloudtrail-${data.aws_caller_identity.current.account_id}"
@@ -225,6 +347,18 @@ resource "aws_s3_bucket" "cloudtrail_bucket" {
   })
 }
 
+resource "aws_s3_bucket_server_side_encryption_configuration" "cloudtrail_bucket" {
+  bucket = aws_s3_bucket.cloudtrail_bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.s3.arn
+    }
+    bucket_key_enabled = true
+  }
+}
+
 resource "aws_s3_bucket_public_access_block" "cloudtrail_bucket" {
   bucket = aws_s3_bucket.cloudtrail_bucket.id
 
@@ -232,6 +366,15 @@ resource "aws_s3_bucket_public_access_block" "cloudtrail_bucket" {
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
+}
+
+# Versioning for CloudTrail Bucket
+resource "aws_s3_bucket_versioning" "cloudtrail_bucket" {
+  bucket = aws_s3_bucket.cloudtrail_bucket.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
 }
 
 resource "aws_s3_bucket_policy" "cloudtrail" {

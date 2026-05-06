@@ -34,23 +34,26 @@ def test_classifier_initialization_custom_model():
 
 def test_classify_document_success(classifier):
     """Test successful document classification."""
+    import json
     # Mock Bedrock response
+    text_content = json.dumps({
+        "document_type": "policy_memo",
+        "sensitivity_level": "fouo",
+        "urgency": "priority",
+        "subject": "Cloud Security Policy Update",
+        "summary": "Policy memo outlining updates to cloud security requirements",
+        "action_required": "Review and approve",
+        "originating_agency": "Federal Agency XYZ",
+        "keywords": ["cloud", "security", "policy"],
+        "confidence_score": 0.95
+    })
     mock_response = {
-        "body": Mock(read=Mock(return_value=b'''{
+        "body": Mock(read=Mock(return_value=json.dumps({
             "content": [{
-                "text": "{
-                    \\"document_type\\": \\"policy_memo\\",
-                    \\"sensitivity_level\\": \\"fouo\\",
-                    \\"urgency\\": \\"priority\\",
-                    \\"subject\\": \\"Cloud Security Policy Update\\",
-                    \\"summary\\": \\"Policy memo outlining updates to cloud security requirements\\",
-                    \\"action_required\\": \\"Review and approve\\",
-                    \\"originating_agency\\": \\"Federal Agency XYZ\\",
-                    \\"keywords\\": [\\"cloud\\", \\"security\\", \\"policy\\"],
-                    \\"confidence_score\\": 0.95
-                }"
+                "type": "text",
+                "text": text_content
             }]
-        }''')),
+        }).encode())),
     }
 
     classifier.bedrock.invoke_model = Mock(return_value=mock_response)
@@ -71,22 +74,25 @@ def test_classify_document_success(classifier):
 
 def test_classify_document_called_bedrock_correctly(classifier):
     """Test that classifier calls Bedrock with correct parameters."""
+    import json
+    text_content = json.dumps({
+        "document_type": "unknown",
+        "sensitivity_level": "unclassified",
+        "urgency": "routine",
+        "subject": "Test",
+        "summary": "Test",
+        "action_required": "None",
+        "originating_agency": None,
+        "keywords": [],
+        "confidence_score": 0.5
+    })
     mock_response = {
-        "body": Mock(read=Mock(return_value=b'''{
+        "body": Mock(read=Mock(return_value=json.dumps({
             "content": [{
-                "text": "{
-                    \\"document_type\\": \\"unknown\\",
-                    \\"sensitivity_level\\": \\"unclassified\\",
-                    \\"urgency\\": \\"routine\\",
-                    \\"subject\\": \\"Test\\",
-                    \\"summary\\": \\"Test\\",
-                    \\"action_required\\": \\"None\\",
-                    \\"originating_agency\\": null,
-                    \\"keywords\\": [],
-                    \\"confidence_score\\": 0.5
-                }"
+                "type": "text",
+                "text": text_content
             }]
-        }''')),
+        }).encode())),
     }
 
     classifier.bedrock.invoke_model = Mock(return_value=mock_response)

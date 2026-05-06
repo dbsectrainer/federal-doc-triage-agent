@@ -1,6 +1,8 @@
 """Individual node implementations for the triage workflow."""
 
-from datetime import datetime
+import os
+import logging
+from datetime import datetime, timezone
 
 from agents.intake_agent import IntakeAgent
 from agents.classifier_agent import ClassifierAgent
@@ -139,28 +141,50 @@ async def route_node(state: TriageState) -> TriageState:
 
 async def approval_node(state: TriageState) -> TriageState:
     """
-    Approval node: Wait for human review and decision.
+    Approval node: Auto-approve high-confidence docs, mark others for review.
 
-    In production, this would integrate with Step Functions to wait for
-    SNS notification of approval decision. For now, returns PENDING state.
+    Auto-approval heuristic: If classification confidence > 0.85, auto-approve.
+    Otherwise, mark as IN_REVIEW to await human decision.
+
+    In production, IN_REVIEW documents would integrate with Step Functions to wait
+    for SNS notification of approval decision.
 
     Updates:
-    - approval_status: Updated to IN_REVIEW
+    - approval_status: APPROVED if confidence > 0.85, else IN_REVIEW
     - approval_reviewer: Assigned reviewer
+    - approval_timestamp: Set if auto-approved
     """
     try:
-        # In production, this would:
-        # 1. Send SNS notification to reviewer
-        # 2. Wait for approval decision callback via API Gateway
-        # 3. Update state with approval_reviewer, approval_timestamp, approval_notes
+        if not state["classification"]:
+            raise ValueError("No classification available for approval")
 
-        # For now, mark as IN_REVIEW
-        return {
-            **state,
-            "approval_status": ApprovalStatus.IN_REVIEW,
-            "approval_reviewer": state["routing"]["primary_reviewer_id"] if state["routing"] else None,
-            "error": None,
-        }
+        confidence = state["classification"]["confidence_score"]
+
+        # Auto-approve high-confidence documents
+        if confidence > 0.85:
+            approval_timestamp = datetime.now(timezone.utc).isoformat()
+            auditor_agent.log_approval_decision(
+                document_id=state["document_id"],
+                reviewer_id="auto-approval-bot",
+                decision="approved",
+                notes=f"Auto-approved based on confidence score: {confidence:.2f}",
+            )
+            return {
+                **state,
+                "approval_status": ApprovalStatus.APPROVED,
+                "approval_reviewer": "auto-approval-bot",
+                "approval_timestamp": approval_timestamp,
+                "approval_notes": f"Auto-approved (confidence: {confidence:.2f})",
+                "error": None,
+            }
+        else:
+            # Low-confidence documents require human review
+            return {
+                **state,
+                "approval_status": ApprovalStatus.IN_REVIEW,
+                "approval_reviewer": state["routing"]["primary_reviewer_id"] if state["routing"] else None,
+                "error": None,
+            }
     except Exception as e:
         auditor_agent.log_error(state["document_id"], "approval_agent", str(e))
         return {
@@ -174,6 +198,12 @@ async def escalation_node(state: TriageState) -> TriageState:
     """
     Escalation node: Check for SLA breaches and escalate if overdue.
 
+    NOTE: SLA check with 1-hour grace period to allow buffer before escalation.
+    TODO: Multi-run SLA check requires state persistence across invocations.
+    Current implementation only works for single-run workflows. For production,
+    implement SLA tracking in DynamoDB to check against deadline from routing,
+    not just when this node executes.
+
     Updates:
     - escalation_count: Incremented if escalated
     - approval_status: Updated to ESCALATED if overdue
@@ -183,12 +213,17 @@ async def escalation_node(state: TriageState) -> TriageState:
             return state
 
         sla_deadline = datetime.fromisoformat(state["routing"]["sla_deadline"])
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
+        grace_period_hours = 1
 
-        if now > sla_deadline:
+        # Check if current time exceeds deadline + grace period
+        from datetime import timedelta
+        escalation_threshold = sla_deadline + timedelta(hours=grace_period_hours)
+
+        if now > escalation_threshold:
             auditor_agent.log_escalation(
                 document_id=state["document_id"],
-                reason="SLA deadline exceeded",
+                reason=f"SLA deadline exceeded (with {grace_period_hours}h grace period)",
                 escalated_to=state["routing"]["backup_reviewer_id"] or "escalation_queue",
             )
 
@@ -209,14 +244,40 @@ async def escalation_node(state: TriageState) -> TriageState:
 
 async def audit_node(state: TriageState) -> TriageState:
     """
-    Audit node: Log all decisions and update processing state.
+    Audit node: Persist audit trail and finalize workflow.
+
+    Attempts to persist all audit events to DynamoDB for compliance tracking.
+    If persistence fails, audit trail is still returned in state for fallback handling.
 
     Updates:
     - processing_complete: Mark workflow as complete
     - audit_trail: Store all audit events
+    - error: Any persistence errors (non-fatal)
     """
     try:
-        # Store audit trail
+        # Get current audit trail
+        events = auditor_agent.get_audit_trail()
+
+        # Log finalization event
+        auditor_agent.log_event(
+            agent="audit_agent",
+            action="finalize_workflow",
+            outcome="success",
+            metadata={
+                "document_id": state["document_id"],
+                "approval_status": state["approval_status"].value,
+                "event_count": len(events),
+            },
+        )
+
+        # Attempt to persist to DynamoDB (non-blocking)
+        table_name = os.environ.get("AUDIT_TABLE_NAME", "federal-doc-triage-audit-trail")
+        persistence_success = auditor_agent.persist_to_dynamodb(table_name)
+
+        if not persistence_success:
+            logging.warning(f"Failed to persist audit trail to DynamoDB table '{table_name}'")
+
+        # Build audit trail for state
         audit_trail = [
             {
                 "event_id": event["event_id"],
@@ -230,22 +291,14 @@ async def audit_node(state: TriageState) -> TriageState:
             for event in auditor_agent.get_audit_trail()
         ]
 
-        # Final logging
-        auditor_agent.log_event(
-            agent="audit_agent",
-            action="finalize_workflow",
-            outcome="success",
-            metadata={
-                "document_id": state["document_id"],
-                "approval_status": state["approval_status"].value,
-                "event_count": len(audit_trail),
-            },
-        )
+        # Clear in-memory trail after persistence
+        auditor_agent.clear_audit_trail()
 
         return {
             **state,
             "audit_trail": audit_trail,
             "processing_complete": True,
+            "audit_persisted": persistence_success,
             "error": None,
         }
     except Exception as e:
