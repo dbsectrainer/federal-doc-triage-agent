@@ -329,7 +329,10 @@ resource "aws_iam_role_policy" "cloudtrail_cloudwatch" {
           "logs:PutLogEvents"
         ]
         Effect   = "Allow"
-        Resource = aws_cloudwatch_log_group.cloudtrail_logs.arn
+        Resource = [
+          aws_cloudwatch_log_group.cloudtrail_logs.arn,
+          "${aws_cloudwatch_log_group.cloudtrail_logs.arn}:*"
+        ]
       }
     ]
   })

@@ -1,5 +1,7 @@
 """Individual node implementations for the triage workflow."""
 
+import os
+import logging
 from datetime import datetime, timezone
 
 from agents.intake_agent import IntakeAgent
@@ -269,10 +271,11 @@ async def audit_node(state: TriageState) -> TriageState:
         )
 
         # Attempt to persist to DynamoDB (non-blocking)
-        # Table name: assume it's passed via environment or config
-        # For now, attempt persistence but continue even if it fails
-        table_name = "federal-doc-triage-audit-trail"
+        table_name = os.environ.get("AUDIT_TABLE_NAME", "federal-doc-triage-audit-trail")
         persistence_success = auditor_agent.persist_to_dynamodb(table_name)
+
+        if not persistence_success:
+            logging.warning(f"Failed to persist audit trail to DynamoDB table '{table_name}'")
 
         # Build audit trail for state
         audit_trail = [
@@ -295,6 +298,7 @@ async def audit_node(state: TriageState) -> TriageState:
             **state,
             "audit_trail": audit_trail,
             "processing_complete": True,
+            "audit_persisted": persistence_success,
             "error": None,
         }
     except Exception as e:

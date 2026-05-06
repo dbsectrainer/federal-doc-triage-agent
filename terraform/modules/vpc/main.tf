@@ -10,6 +10,17 @@ terraform {
   }
 }
 
+locals {
+  az_count = length(var.availability_zones)
+
+  # Validate that subnet CIDR lists match the number of availability zones
+  validate_subnet_counts = (
+    length(var.public_subnet_cidrs) == local.az_count &&
+    length(var.private_subnet_cidrs) == local.az_count &&
+    length(var.database_subnet_cidrs) == local.az_count
+  ) ? null : file("ERROR: Subnet CIDR list lengths must equal the number of availability zones")
+}
+
 # VPC
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
@@ -228,7 +239,10 @@ resource "aws_iam_role_policy" "flow_logs" {
           "logs:DescribeLogStreams"
         ]
         Effect   = "Allow"
-        Resource = aws_cloudwatch_log_group.flow_logs.arn
+        Resource = [
+          aws_cloudwatch_log_group.flow_logs.arn,
+          "${aws_cloudwatch_log_group.flow_logs.arn}:*"
+        ]
       },
       {
         Action   = "logs:CreateLogGroup"

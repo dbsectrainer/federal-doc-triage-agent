@@ -111,9 +111,10 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
                 logger.info(f"Document processing complete: {document_id}")
 
+                approval_status = result.get("approval_status", "pending")
                 results.append({
                     "document_id": document_id,
-                    "status": result.get("approval_status", "pending"),
+                    "status": approval_status.value if hasattr(approval_status, "value") else str(approval_status),
                 })
 
             except (KeyError, ValueError) as e:

@@ -138,9 +138,6 @@ See `FEDRAMP-ALIGNMENT.md` for complete control mapping.
 ### Post-Deployment Verification
 
 ```bash
-# Run automated security tests
-pytest tests/security_*.py -v
-
 # Run full test suite with coverage
 pytest tests/ --cov=agents --cov=workflows -v
 

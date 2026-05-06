@@ -134,6 +134,9 @@ source .venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
+# Install dev dependencies (for testing)
+pip install -r requirements-dev.txt
+
 # Set environment variables (optional for local demo)
 cp .env.example .env
 # Edit .env with your AWS credentials and region
@@ -160,7 +163,7 @@ docker run --rm \
   -e AWS_PROFILE=govcloud \
   -v ~/.aws:/home/appuser/.aws:ro \
   federal-doc-triage-agent \
-  python -m agents.demo --document samples/sample_foia_request.txt
+  python -m agents.demo samples/sample_foia_request.txt
 ```
 
 ### AWS Deployment (GovCloud)
