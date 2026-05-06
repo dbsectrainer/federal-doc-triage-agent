@@ -1,5 +1,0 @@
-{
-  "permissions": {
-    "allow": ["Bash(awk '{print $2}')", "Bash(terraform init *)"]
-  }
-}

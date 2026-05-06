@@ -322,14 +322,16 @@ resource "aws_iam_role_policy" "cloudtrail_cloudwatch" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Action = [
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ]
-      Effect   = "Allow"
-      Resource = "${aws_cloudwatch_log_group.cloudtrail_logs.arn}:*"
-    }]
+    Statement = [
+      {
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Effect   = "Allow"
+        Resource = aws_cloudwatch_log_group.cloudtrail_logs.arn
+      }
+    ]
   })
 }
 

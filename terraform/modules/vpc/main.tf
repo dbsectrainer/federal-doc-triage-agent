@@ -228,12 +228,12 @@ resource "aws_iam_role_policy" "flow_logs" {
           "logs:DescribeLogStreams"
         ]
         Effect   = "Allow"
-        Resource = "${aws_cloudwatch_log_group.flow_logs.arn}:*"
+        Resource = aws_cloudwatch_log_group.flow_logs.arn
       },
       {
         Action   = "logs:CreateLogGroup"
         Effect   = "Allow"
-        Resource = "${aws_cloudwatch_log_group.flow_logs.arn}:*"
+        Resource = aws_cloudwatch_log_group.flow_logs.arn
       }
     ]
   })
