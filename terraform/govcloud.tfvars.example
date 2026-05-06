@@ -1,0 +1,63 @@
+# Federal Document Triage Agent - AWS GovCloud Terraform Configuration
+# Copy to terraform.tfvars and update with your values
+
+# AWS GovCloud Region
+aws_region = "us-gov-west-1"  # Or us-gov-east-1 for redundancy
+
+# Environment
+environment = "production"
+
+# Project Configuration
+project_name = "federal-doc-triage-agent"
+
+# VPC Configuration
+vpc_cidr             = "10.0.0.0/16"
+availability_zones   = ["us-gov-west-1a", "us-gov-west-1b"]
+public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs = ["10.0.10.0/24", "10.0.11.0/24"]
+database_subnet_cidrs = ["10.0.20.0/24", "10.0.21.0/24"]
+
+# DynamoDB Tables
+audit_table_name = "document-triage-audit"
+state_table_name = "document-triage-state"
+
+# Lambda Configuration
+lambda_memory_size = 512
+lambda_timeout     = 300
+
+# Bedrock Model
+bedrock_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+# Document Retention (7 years per NARA requirement)
+document_retention_days = 2555
+
+# AWS Security Services
+enable_guardduty   = true
+enable_security_hub = true
+
+# Logging
+enable_logging      = true
+log_retention_days  = 365
+
+# Document Processing
+max_document_size_mb = 100
+use_comprehend      = true
+
+# SLA Configuration (hours/days)
+sla_routine_days    = 10
+sla_priority_days   = 5
+sla_immediate_hours = 24
+sla_emergency_hours = 4
+
+# Common Tags (applied to all resources)
+tags = {
+  Project              = "federal-doc-triage-agent"
+  Environment          = "production"
+  CostCenter           = "compliance"
+  DataClassification   = "fouo"
+  ComplianceFramework  = "fedramp-moderate"
+  BackupRetention      = "nara-7year"
+  ManagedBy            = "terraform"
+  CreatedBy            = "BE EASY ENTERPRISES"
+  FedRAMPAuthorization = "moderate"
+}
