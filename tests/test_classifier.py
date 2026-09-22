@@ -111,3 +111,27 @@ def test_classify_document_called_bedrock_correctly(classifier):
     assert call_args.kwargs["modelId"] == classifier.model_id
     assert call_args.kwargs["contentType"] == "application/json"
     assert call_args.kwargs["accept"] == "application/json"
+
+
+def test_classify_document_demo_mode(monkeypatch):
+    """Test local rule-based classification when DEMO_MODE is enabled."""
+    monkeypatch.setenv("DEMO_MODE", "true")
+
+    with patch("boto3.client"):
+        classifier = ClassifierAgent()
+
+    foia_content = (
+        "FREEDOM OF INFORMATION ACT REQUEST\n"
+        "RE: Freedom of Information Act Request\n"
+        "REQUEST FOR EXPEDITED PROCESSING"
+    )
+    result = classifier.classify_document(
+        document_id="DOC-FOIA",
+        content=foia_content,
+        redacted_content=foia_content,
+    )
+
+    assert result["document_type"] == DocumentType.FOIA
+    assert result["urgency"] == Urgency.IMMEDIATE
+    assert result["confidence_score"] > 0
+    assert not classifier.bedrock.invoke_model.called

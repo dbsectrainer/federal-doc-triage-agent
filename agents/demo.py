@@ -1,9 +1,17 @@
 """Demo runner for local testing of the triage workflow."""
 
 import asyncio
-import sys
 import json
+import os
+import sys
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+# Demo runner works without AWS credentials
+os.environ["DEMO_MODE"] = "true"
+os.environ["USE_COMPREHEND"] = "false"
 
 from agents.supervisor import SupervisorAgent
 

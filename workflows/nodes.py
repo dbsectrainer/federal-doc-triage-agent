@@ -270,12 +270,15 @@ async def audit_node(state: TriageState) -> TriageState:
             },
         )
 
-        # Attempt to persist to DynamoDB (non-blocking)
-        table_name = os.environ.get("AUDIT_TABLE_NAME", "federal-doc-triage-audit-trail")
-        persistence_success = auditor_agent.persist_to_dynamodb(table_name)
-
-        if not persistence_success:
-            logging.warning(f"Failed to persist audit trail to DynamoDB table '{table_name}'")
+        # Attempt to persist to DynamoDB (non-blocking; skipped in local demo mode)
+        demo_mode = os.environ.get("DEMO_MODE", "").lower() in ("true", "1", "yes")
+        if demo_mode:
+            persistence_success = True
+        else:
+            table_name = os.environ.get("AUDIT_TABLE_NAME", "federal-doc-triage-audit-trail")
+            persistence_success = auditor_agent.persist_to_dynamodb(table_name)
+            if not persistence_success:
+                logging.warning(f"Failed to persist audit trail to DynamoDB table '{table_name}'")
 
         # Build audit trail for state
         audit_trail = [

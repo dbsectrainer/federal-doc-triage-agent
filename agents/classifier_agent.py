@@ -1,6 +1,8 @@
 """Classifier agent using AWS Bedrock to classify federal documents."""
 
 import json
+import logging
+import os
 import re
 import boto3
 
@@ -10,6 +12,8 @@ from workflows.state import (
     Urgency,
     ClassificationResult,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ClassifierAgent:
@@ -48,6 +52,95 @@ class ClassifierAgent:
 
         return sanitized
 
+    @staticmethod
+    def _is_demo_mode() -> bool:
+        return os.environ.get("DEMO_MODE", "").lower() in ("true", "1", "yes")
+
+    def _classify_local(self, content: str, redacted_content: str) -> ClassificationResult:
+        """Rule-based classification for local demo when Bedrock is unavailable."""
+        text = (redacted_content or content).lower()
+
+        doc_type_patterns = [
+            (DocumentType.FOIA, ["freedom of information act", "foia request", " foia "]),
+            (DocumentType.INCIDENT_REPORT, ["security incident report", "incident report", "incident id:"]),
+            (DocumentType.CONTRACT, ["contract approval", "contract number", "procurement division", "contractual details"]),
+            (DocumentType.EXECUTIVE_CORRESPONDENCE, ["memorandum for chief executive", "office of the director", "congressional"]),
+            (DocumentType.POLICY_MEMO, ["policy memo", "directive", "standard operating procedure"]),
+            (DocumentType.PERSONNEL_ACTION, ["personnel action", "termination of employment", "new hire"]),
+            (DocumentType.FINANCIAL, ["invoice", "budget request", "financial report"]),
+            (DocumentType.LEGAL, ["subpoena", "legal counsel"]),
+        ]
+
+        document_type = DocumentType.UNKNOWN
+        matched_keywords = []
+        for doc_type, keywords in doc_type_patterns:
+            hits = [kw for kw in keywords if kw in text]
+            if hits:
+                document_type = doc_type
+                matched_keywords.extend(hits)
+                break
+
+        if re.search(r"\bsbu\b|sensitive but unclassified", text):
+            sensitivity_level = SensitivityLevel.SENSITIVE_BUT_UNCLASSIFIED
+        elif re.search(r"\bcui\b|controlled unclassified information", text):
+            sensitivity_level = SensitivityLevel.CONTROLLED_UNCLASSIFIED
+        elif re.search(r"\bfouo\b|for official use only", text):
+            sensitivity_level = SensitivityLevel.FOR_OFFICIAL_USE_ONLY
+        else:
+            sensitivity_level = SensitivityLevel.UNCLASSIFIED
+
+        if re.search(r"emergency|immediate action required", text):
+            urgency = Urgency.EMERGENCY
+        elif re.search(r"expedited processing|severity level:\s*high|within 24 hours", text):
+            urgency = Urgency.IMMEDIATE
+        elif re.search(r"\bpriority\b", text):
+            urgency = Urgency.PRIORITY
+        else:
+            urgency = Urgency.ROUTINE
+
+        agency_match = re.search(
+            r"(?:to:|from:|reporting agency:)\s*([^\n]+)",
+            redacted_content or content,
+            re.IGNORECASE,
+        )
+        originating_agency = agency_match.group(1).strip() if agency_match else None
+
+        subject_match = re.search(
+            r"(?:subject|re):\s*(.+)",
+            redacted_content or content,
+            re.IGNORECASE,
+        )
+        subject = subject_match.group(1).strip() if subject_match else f"{document_type.value.replace('_', ' ').title()} Document"
+
+        summary = (
+            f"Local demo classification identified this as a {document_type.value.replace('_', ' ')} "
+            f"document with {sensitivity_level.value.upper()} sensitivity."
+        )
+
+        action_map = {
+            DocumentType.FOIA: "Forward to legal counsel for FOIA processing",
+            DocumentType.CONTRACT: "Review and approve contract recommendation",
+            DocumentType.INCIDENT_REPORT: "Escalate to security team for investigation",
+            DocumentType.EXECUTIVE_CORRESPONDENCE: "Route to Chief of Staff for review",
+            DocumentType.POLICY_MEMO: "Review policy changes and approve",
+            DocumentType.LEGAL: "Forward to legal counsel",
+        }
+        action_required = action_map.get(document_type, "Review and route appropriately")
+
+        confidence_score = min(0.70 + (0.05 * len(matched_keywords)), 0.92)
+
+        return ClassificationResult(
+            document_type=document_type,
+            sensitivity_level=sensitivity_level,
+            urgency=urgency,
+            subject=subject,
+            summary=summary,
+            action_required=action_required,
+            originating_agency=originating_agency,
+            keywords=matched_keywords or [document_type.value],
+            confidence_score=confidence_score,
+        )
+
     def classify_document(
         self, document_id: str, content: str, redacted_content: str
     ) -> ClassificationResult:
@@ -68,6 +161,19 @@ class ClassifierAgent:
         # Sanitize document_id to prevent prompt injection
         document_id = self._sanitize_document_id(document_id)
 
+        if self._is_demo_mode():
+            logger.info("DEMO_MODE enabled — using local rule-based classification")
+            return self._classify_local(content, redacted_content)
+
+        try:
+            return self._classify_with_bedrock(document_id, content, redacted_content)
+        except Exception as exc:
+            logger.warning("Bedrock classification failed, using local fallback: %s", exc)
+            return self._classify_local(content, redacted_content)
+
+    def _classify_with_bedrock(
+        self, document_id: str, content: str, redacted_content: str
+    ) -> ClassificationResult:
         prompt = f"""You are a federal document classification expert. Analyze the following document and classify it using the schema provided.
 
 DOCUMENT ID: {document_id}

@@ -1,5 +1,6 @@
 """Intake agent for document parsing and PII redaction."""
 
+import os
 import re
 import logging
 import boto3
@@ -42,6 +43,10 @@ class IntakeAgent:
 
         Uses AWS Comprehend for ML-based detection with fallback to regex patterns.
         """
+        use_comprehend = os.environ.get("USE_COMPREHEND", "true").lower() in ("true", "1", "yes")
+        if not use_comprehend:
+            return self._detect_pii_regex(text)
+
         try:
             # AWS Comprehend PII detection
             response = self.comprehend.detect_pii_entities(Text=text, LanguageCode="en")
