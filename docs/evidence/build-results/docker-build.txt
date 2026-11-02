@@ -1,0 +1,39 @@
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            BuildKit is currently disabled; enable it by removing the DOCKER_BUILDKIT=0
+            environment-variable.
+
+Sending build context to Docker daemon  229.9kB
+Step 1/10 : FROM python:3.12-slim-bookworm
+ ---> e697c8189730
+Step 2/10 : ENV PYTHONUNBUFFERED=1     PYTHONDONTWRITEBYTECODE=1     PIP_NO_CACHE_DIR=1
+ ---> Using cache
+ ---> 5c40aa57f9ac
+Step 3/10 : WORKDIR /app
+ ---> Using cache
+ ---> 7a942b2c275f
+Step 4/10 : COPY requirements.txt .
+ ---> Using cache
+ ---> f059e18ef7e1
+Step 5/10 : RUN pip install --no-cache-dir -r requirements.txt
+ ---> Using cache
+ ---> f1191f557d53
+Step 6/10 : COPY . .
+ ---> 53121dfdf187
+Step 7/10 : RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+ ---> Running in 54bcc80abed1
+ ---> Removed intermediate container 54bcc80abed1
+ ---> 8493d6ac5734
+Step 8/10 : USER appuser
+ ---> Running in bae0389a2264
+ ---> Removed intermediate container bae0389a2264
+ ---> c1821bf3944a
+Step 9/10 : HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3     CMD python -c "from workflows.graph import create_workflow; create_workflow()" || exit 1
+ ---> Running in cbc2d5474d32
+ ---> Removed intermediate container cbc2d5474d32
+ ---> 1fa39ef9932f
+Step 10/10 : CMD ["python", "-m", "agents.demo", "samples/sample_foia_request.txt"]
+ ---> Running in df20a8e04ba0
+ ---> Removed intermediate container df20a8e04ba0
+ ---> bca1addf6e5b
+Successfully built bca1addf6e5b
+Successfully tagged federal-doc-triage-agent:audit

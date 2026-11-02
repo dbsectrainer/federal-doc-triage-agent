@@ -1,11 +1,13 @@
 """Auditor agent for compliance logging and audit trail."""
 
 import json
-import uuid
 import logging
-import boto3
+import os
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict
+
+import boto3
 
 from workflows.state import AuditEvent
 
@@ -15,9 +17,10 @@ logger = logging.getLogger(__name__)
 class AuditorAgent:
     """Handles compliance logging and audit trail creation for FISMA/FedRAMP."""
 
-    def __init__(self, region: str = "us-gov-west-1"):
+    def __init__(self, region: str = None):
         self.audit_events = []
-        self.dynamodb = boto3.resource("dynamodb", region_name=region)
+        self.region = region or os.environ.get("AWS_REGION") or "us-gov-west-1"
+        self.dynamodb = boto3.resource("dynamodb", region_name=self.region)
 
     def log_event(
         self,
@@ -153,7 +156,7 @@ class AuditorAgent:
 
     def get_audit_trail(self) -> list[AuditEvent]:
         """Get all audit events logged in this session."""
-        return self.audit_events
+        return list(self.audit_events)
 
     def export_audit_trail_json(self) -> str:
         """Export audit trail as JSON for CloudTrail / DynamoDB storage."""
@@ -162,6 +165,11 @@ class AuditorAgent:
     def persist_to_dynamodb(self, table_name: str, events: list = None) -> bool:
         """
         Persist audit events to DynamoDB for long-term compliance tracking.
+
+        The Terraform table is keyed by ``document_id`` (partition key) and
+        ``timestamp`` (sort key), matching the items written here.  Events
+        without a ``document_id`` in their metadata are rejected rather than
+        silently written under a placeholder key.
 
         Args:
             table_name: DynamoDB table name
@@ -178,34 +186,46 @@ class AuditorAgent:
                 logger.warning("No events to persist to DynamoDB")
                 return True
 
-            table = self.dynamodb.Table(table_name)
+            items = []
+            for event in events:
+                metadata = event.get("metadata") or {}
+                document_id = metadata.get("document_id")
+                if not document_id:
+                    logger.error(
+                        "Refusing to persist audit event %s without document_id",
+                        event.get("event_id"),
+                    )
+                    return False
 
-            # Batch write items (max 25 per request)
-            with table.batch_writer() as batch:
-                for event in events:
-                    # Ensure event_id is string (partition key)
-                    item = {
-                        "event_id": event["event_id"],
+                items.append(
+                    {
+                        "document_id": str(document_id),
                         "timestamp": event["timestamp"],
+                        "event_id": event["event_id"],
                         "event_type": event["event_type"],
                         "agent": event["agent"],
                         "action": event["action"],
                         "outcome": event["outcome"],
-                        "metadata": json.dumps(event["metadata"], default=str),
+                        "metadata": json.dumps(metadata, default=str),
                     }
+                )
+
+            table = self.dynamodb.Table(table_name)
+
+            # Batch writer splits requests at DynamoDB's 25-item limit.
+            with table.batch_writer() as batch:
+                for item in items:
                     batch.put_item(Item=item)
 
             logger.info(
                 "Persisted %d audit events to DynamoDB table %s",
-                len(events),
+                len(items),
                 table_name,
             )
             return True
 
-        except Exception as e:
-            logger.error(
-                "Failed to persist audit events to DynamoDB: %s", str(e)
-            )
+        except Exception as exc:
+            logger.error("Failed to persist audit events to DynamoDB: %s", exc)
             return False
 
     def clear_audit_trail(self):

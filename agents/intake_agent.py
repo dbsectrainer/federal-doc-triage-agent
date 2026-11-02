@@ -1,22 +1,57 @@
 """Intake agent for document parsing and PII redaction."""
 
+from __future__ import annotations
+
+import logging
 import os
 import re
-import logging
+
 import boto3
 
 from workflows.state import PIIDetection
 
 logger = logging.getLogger(__name__)
 
+# Comprehend's synchronous DetectPiiEntities API accepts at most 100 KB of
+# UTF-8 text.  Larger documents use the regex fallback instead of failing the
+# AWS call and waiting for an exception.
+COMPREHEND_MAX_BYTES = 100_000
+
+PII_PATTERNS = {
+    "SSN": r"\b\d{3}-\d{2}-\d{4}\b",
+    "EMAIL": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
+    "PHONE": r"\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b",
+    "CREDIT_CARD": r"\b(?:\d{4}[-\s]?){3}\d{4}\b",
+    "DATE_OF_BIRTH": r"\b(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12][0-9]|3[01])/(?:19|20)\d{2}\b",
+}
+
+REDACTION_PATTERNS = {
+    "SSN": (r"\b\d{3}-\d{2}-\d{4}\b", "[REDACTED:SSN]"),
+    "EMAIL": (r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", "[REDACTED:EMAIL]"),
+    "PHONE": (
+        r"\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b",
+        "[REDACTED:PHONE]",
+    ),
+    "CREDIT_CARD": (r"\b(?:\d{4}[-\s]?){3}\d{4}\b", "[REDACTED:CREDIT_CARD]"),
+    "DATE_OF_BIRTH": (
+        r"\b(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12][0-9]|3[01])/(?:19|20)\d{2}\b",
+        "[REDACTED:DATE_OF_BIRTH]",
+    ),
+}
+
 
 class IntakeAgent:
     """Handles document parsing, format detection, and PII redaction."""
 
-    def __init__(self, region: str = "us-gov-west-1"):
-        self.region = region
-        self.comprehend = boto3.client("comprehend", region_name=region)
-        self.textract = boto3.client("textract", region_name=region)
+    def __init__(self, region: str = None):
+        self.region = (
+            region
+            or os.environ.get("AWS_REGION")
+            or os.environ.get("BEDROCK_REGION")
+            or "us-gov-west-1"
+        )
+        self.comprehend = boto3.client("comprehend", region_name=self.region)
+        self.textract = boto3.client("textract", region_name=self.region)
 
     def process_document(self, document_id: str, content: str) -> tuple[str, PIIDetection]:
         """
@@ -37,21 +72,43 @@ class IntakeAgent:
 
         return redacted_content, pii_detection
 
+    @staticmethod
+    def _confidence_threshold() -> float:
+        raw = os.environ.get("REDACTION_CONFIDENCE_THRESHOLD", "0.8")
+        try:
+            value = float(raw)
+        except ValueError:
+            return 0.8
+        return min(max(value, 0.0), 1.0)
+
     def _detect_pii(self, text: str) -> PIIDetection:
         """
         Detect Personally Identifiable Information in text.
 
         Uses AWS Comprehend for ML-based detection with fallback to regex patterns.
         """
-        use_comprehend = os.environ.get("USE_COMPREHEND", "true").lower() in ("true", "1", "yes")
+        use_comprehend = os.environ.get("USE_COMPREHEND", "true").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
         if not use_comprehend:
+            return self._detect_pii_regex(text)
+
+        if len(text.encode("utf-8")) > COMPREHEND_MAX_BYTES:
+            logger.info("Document exceeds Comprehend synchronous limit; using regex PII detection")
             return self._detect_pii_regex(text)
 
         try:
             # AWS Comprehend PII detection
             response = self.comprehend.detect_pii_entities(Text=text, LanguageCode="en")
 
-            entities = response.get("Entities", [])
+            threshold = self._confidence_threshold()
+            entities = [
+                entity
+                for entity in response.get("Entities", [])
+                if float(entity.get("Score", 1.0)) >= threshold
+            ]
             entity_types = list(set(entity["Type"] for entity in entities))
             entity_count = len(entities)
 
@@ -70,93 +127,80 @@ class IntakeAgent:
                 has_pii=entity_count > 0,
                 entity_types=entity_types,
                 entity_count=entity_count,
-                redaction_applied=True,
+                redaction_applied=entity_count > 0,
                 detected_entities=detected_entities,
             )
-        except Exception as e:
+        except Exception as exc:
             # Fallback: regex-based detection
-            logger.warning("Comprehend failed, falling back to regex: %s", e)
+            logger.warning("Comprehend failed, falling back to regex: %s", exc)
             return self._detect_pii_regex(text)
 
     def _detect_pii_regex(self, text: str) -> PIIDetection:
         """Fallback PII detection using regex patterns."""
-        patterns = {
-            "SSN": r"\b\d{3}-\d{2}-\d{4}\b",
-            "EMAIL": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
-            "PHONE": r"\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b",
-            "CREDIT_CARD": r"\b(?:\d{4}[-\s]?){3}\d{4}\b",
-            "DATE_OF_BIRTH": r"\b(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12][0-9]|3[01])/(?:19|20)\d{2}\b",
-        }
-
-        entity_types = []
-        detected_entities = []
-        total_count = 0
-
-        for entity_type, pattern in patterns.items():
+        matches = []
+        for entity_type, pattern in PII_PATTERNS.items():
             for match in re.finditer(pattern, text):
-                entity_types.append(entity_type)
-                detected_entities.append({
-                    "text": match.group(),
-                    "type": entity_type,
-                    "start": match.start(),
-                    "end": match.end(),
-                })
-                total_count += 1
+                matches.append(
+                    {
+                        "text": match.group(),
+                        "type": entity_type,
+                        "start": match.start(),
+                        "end": match.end(),
+                    }
+                )
 
-        # Remove duplicates from entity_types
-        entity_types = list(set(entity_types))
+        # Resolve overlaps deterministically by preferring the longest match at
+        # each position.  Without this, a phone number inside a credit-card
+        # string (or vice versa) would produce overlapping replacements.
+        matches.sort(key=lambda entity: (entity["start"], -(entity["end"] - entity["start"])))
+        selected = []
+        last_end = -1
+        for entity in matches:
+            if entity["start"] >= last_end:
+                selected.append(entity)
+                last_end = entity["end"]
+
+        selected.sort(key=lambda entity: entity["start"])
+        entity_types = sorted({entity["type"] for entity in selected})
 
         return PIIDetection(
-            has_pii=total_count > 0,
+            has_pii=bool(selected),
             entity_types=entity_types,
-            entity_count=total_count,
-            redaction_applied=True,
-            detected_entities=detected_entities,
+            entity_count=len(selected),
+            redaction_applied=bool(selected),
+            detected_entities=selected,
         )
 
     def _redact_pii(self, text: str, pii_detection: PIIDetection) -> str:
         """
         Redact PII from text based on detection results.
 
-        Replaces identified PII patterns with [REDACTED:TYPE] placeholders.
-        Handles both Comprehend-detected entities and regex-based fallback patterns.
+        Replaces identified PII spans with ``[REDACTED:TYPE]`` placeholders.
+        Detected spans are applied from right to left so earlier offsets stay
+        valid.
         """
         if not pii_detection["has_pii"]:
             return text
 
-        redacted = text
-
-        # If we have detected_entities from Comprehend, redact them directly by position
-        if pii_detection.get("detected_entities"):
-            # Sort entities by start position in reverse order to maintain positions
-            sorted_entities = sorted(
-                pii_detection["detected_entities"],
-                key=lambda e: e["start"],
-                reverse=True
-            )
-            # Replace from end to start to avoid position shifts
-            for entity in sorted_entities:
+        entities = pii_detection.get("detected_entities") or []
+        if entities:
+            redacted = text
+            for entity in sorted(entities, key=lambda item: item["start"], reverse=True):
+                start = max(int(entity["start"]), 0)
+                end = min(int(entity["end"]), len(redacted))
+                if start >= end:
+                    continue
                 replacement = f"[REDACTED:{entity['type']}]"
-                redacted = (
-                    redacted[: entity["start"]]
-                    + replacement
-                    + redacted[entity["end"] :]
-                )
-        else:
-            # Fallback: use regex patterns for entity types
-            redaction_patterns = {
-                "SSN": (r"\b\d{3}-\d{2}-\d{4}\b", "[REDACTED:SSN]"),
-                "EMAIL": (r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b", "[REDACTED:EMAIL]"),
-                "PHONE": (r"\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b", "[REDACTED:PHONE]"),
-                "CREDIT_CARD": (r"\b(?:\d{4}[-\s]?){3}\d{4}\b", "[REDACTED:CC]"),
-                "DATE_OF_BIRTH": (r"\b(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12][0-9]|3[01])/(?:19|20)\d{2}\b", "[REDACTED:DOB]"),
-            }
+                redacted = redacted[:start] + replacement + redacted[end:]
+            return redacted
 
-            for entity_type in pii_detection["entity_types"]:
-                if entity_type in redaction_patterns:
-                    pattern, replacement = redaction_patterns[entity_type]
-                    redacted = re.sub(pattern, replacement, redacted, flags=re.IGNORECASE)
-
+        # Defensive fallback for callers that supply entity types but no spans.
+        redacted = text
+        for entity_type in pii_detection["entity_types"]:
+            pattern_and_replacement = REDACTION_PATTERNS.get(entity_type)
+            if pattern_and_replacement:
+                pattern, replacement = pattern_and_replacement
+                redacted = re.sub(pattern, replacement, redacted, flags=re.IGNORECASE)
         return redacted
 
     def extract_text_from_pdf(self, document_id: str, s3_key: str) -> str:
@@ -165,7 +209,7 @@ class IntakeAgent:
 
         Args:
             document_id: Document identifier
-            s3_key: S3 path in format "bucket/key" or "bucket"
+            s3_key: S3 path in format "bucket/key"
 
         Returns:
             Extracted text from PDF, or error message if extraction fails
@@ -175,8 +219,9 @@ class IntakeAgent:
         try:
             # Parse S3 path
             parts = s3_key.split("/", 1)
-            bucket = parts[0]
-            key = parts[1] if len(parts) > 1 else parts[0]
+            if len(parts) != 2 or not parts[0] or not parts[1]:
+                raise ValueError("s3_key must be in 'bucket/key' format")
+            bucket, key = parts
 
             # Start async text detection job
             response = self.textract.start_document_text_detection(
@@ -208,7 +253,7 @@ class IntakeAgent:
                     )
                     return extracted_text
 
-                elif job_status == "FAILED":
+                if job_status == "FAILED":
                     error_msg = f"Textract job failed for {document_id}"
                     logger.error(error_msg)
                     return f"[Error: {error_msg}]"
@@ -221,8 +266,8 @@ class IntakeAgent:
             logger.error(error_msg)
             return f"[Error: {error_msg}]"
 
-        except Exception as e:
-            error_msg = f"Error extracting PDF {document_id}: {str(e)}"
+        except Exception as exc:
+            error_msg = f"Error extracting PDF {document_id}: {exc}"
             logger.error(error_msg)
             return f"[Error: {error_msg}]"
 

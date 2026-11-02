@@ -1,5 +1,14 @@
 # Federal Document Triage Agent — Code Review Plan
 
+> **Historical document (May 2026).** This was an earlier review plan. Several
+> findings were subsequently fixed (VPC module, Object Lock, Textract polling,
+> prompt-ID sanitization, SBU routing, retry handling, Docker credential path,
+> dependency pins), while others remain open (Lambda/Terraform deployment,
+> human-in-the-loop notifications, live AWS verification). It is retained for
+> project history and is **not** the current status. See
+> [`docs/evidence/verification-report.md`](docs/evidence/verification-report.md)
+> for the 2026-11-01 audit and current residual risks.
+
 ## Context
 
 The repository claims to be a production-ready FedRAMP Moderate-aligned multi-agent document triage system. This review verifies whether the implementation matches those claims, identifies bugs, security gaps, and incomplete stubs, and provides a prioritized fix list.

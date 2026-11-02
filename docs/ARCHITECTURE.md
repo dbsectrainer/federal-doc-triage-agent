@@ -1,481 +1,236 @@
 # System Architecture
 
-## Multi-Agent Workflow
+**Status:** describes the code that exists today. Infrastructure/AWS behavior
+that was not executed is called out explicitly. For the audit evidence and
+residual risks, see
+[`evidence/verification-report.md`](evidence/verification-report.md).
 
-The Federal Document Triage Agent uses a **multi-agent orchestration** pattern with **LangGraph** to coordinate specialized agents:
+## 1. Runtime Shape
 
-```
-Document Intake
-     ↓
-┌────────────────────────────────────────────────────────┐
-│              LangGraph Workflow Orchestration            │
-├────────────────────────────────────────────────────────┤
-│                                                          │
-│  [Intake Agent] → [Classifier Agent] → [Router Agent]  │
-│       ↓                    ↓                    ↓        │
-│  • PII Detection       • Document Type      • Queue      │
-│  • Redaction          • Sensitivity          Assignment  │
-│  • Normalization      • Urgency              • SLA       │
-│  • Format Detection   • Confidence          • Reviewer   │
-│                                                          │
-│         ↓                                                │
-│  [Approval Agent] ──→ [Escalation Agent] ──→ [Audit]   │
-│       ↓                      ↓                    ↓       │
-│  • Human Review        • SLA Monitoring      • Logging   │
-│  • Decision Tracking   • Escalation          • Archive   │
-│  • Status Updates      • Notifications       • Reports   │
-│                                                          │
-└────────────────────────────────────────────────────────┘
-     ↓
-Archive & Compliance Logging (CloudTrail + DynamoDB)
-```
+The repository is a Python **CLI/Lambda backend**, not a web service.
 
-## Component Details
-
-### 1. Intake Agent
-
-**Responsibility:** Document parsing, normalization, and PII detection
-
-**Inputs:**
-
-- Raw document content (text)
-- Document metadata (ID, source)
-
-**Processing:**
-
-1. Normalize whitespace and line breaks
-2. Detect PII using AWS Comprehend (with regex fallback)
-3. Redact sensitive information with `[REDACTED:TYPE]` placeholders
-4. Extract document statistics (length, language, etc.)
-
-**Outputs:**
-
-- `document_content_redacted`: PII-safe content for LLM
-- `pii_detection`: Metadata about PII found
-  - `has_pii`: boolean
-  - `entity_types`: list of detected types (SSN, EMAIL, PHONE, etc.)
-  - `entity_count`: number of PII instances
-  - `redaction_applied`: boolean
-
-**Implementation:** `agents/intake_agent.py`
-
----
-
-### 2. Classifier Agent
-
-**Responsibility:** Document classification via AWS Bedrock
-
-**Inputs:**
-
-- Document ID
-- Original content (for context)
-- Redacted content (sent to LLM)
-
-**Processing:**
-
-1. Call AWS Bedrock API with Claude 3 Sonnet
-2. Send structured JSON prompt requesting:
-   - `document_type`: One of [contract, foia, policy_memo, incident_report, personnel_action, financial, executive_correspondence, legal, unknown]
-   - `sensitivity_level`: One of [unclassified, cui, sbu, fouo]
-   - `urgency`: One of [routine, priority, immediate, emergency]
-   - `subject`: Brief subject line
-   - `summary`: 2-3 sentence summary
-   - `action_required`: Specific action needed
-   - `originating_agency`: Agency name or null
-   - `keywords`: List of relevant keywords
-   - `confidence_score`: 0.0-1.0 confidence
-
-**Outputs:**
-
-- `ClassificationResult` with all above fields
-
-**Implementation:** `agents/classifier_agent.py`
-
-**FedRAMP Compliance:** Uses AWS Bedrock in GovCloud region, all requests encrypted in transit
-
----
-
-### 3. Router Agent
-
-**Responsibility:** Rule-based routing to appropriate queue and reviewer
-
-**Routing Rules Matrix:**
-
-| Document Type            | Sensitivity  | Primary Queue       | Backup Queue   | SLA                 |
-| ------------------------ | ------------ | ------------------- | -------------- | ------------------- |
-| Contract                 | CUI          | Contracting Officer | Legal Counsel  | 5 days              |
-| FOIA                     | Unclassified | Legal Counsel       | Policy Office  | 10 days             |
-| Policy Memo              | FOUO         | Chief of Staff      | Policy Office  | 5 days              |
-| Incident Report          | CUI/FOUO     | Security Team       | Legal Counsel  | 4 hours (emergency) |
-| Personnel Action         | CUI          | HR Office           | Legal Counsel  | 5 days              |
-| Financial                | CUI          | Finance Office      | Chief of Staff | 5 days              |
-| Executive Correspondence | FOUO         | Chief of Staff      | Policy Office  | 24 hours            |
-| Legal                    | CUI/FOUO     | Legal Counsel       | Security Team  | 5 days              |
-
-**SLA Mapping:**
-
-| Urgency   | SLA Deadline     |
-| --------- | ---------------- |
-| Routine   | 10 business days |
-| Priority  | 5 business days  |
-| Immediate | 24 hours         |
-| Emergency | 4 hours          |
-
-**Implementation:** `agents/router_agent.py`
-
----
-
-### 4. Approval Agent
-
-**Responsibility:** Coordinate human review and decision
-
-**Workflow:**
-
-1. Notify assigned reviewer via SNS/SES
-2. Wait for approval decision via API callback
-3. Track review timestamp and notes
-4. Update document status (approved/rejected/delegated)
-
-**Integration Points:**
-
-- AWS SNS for reviewer notification
-- API Gateway for approval callbacks
-- Step Functions for workflow state machine (future)
-
-**Implementation:** `workflows/nodes.py` → `approval_node()`
-
----
-
-### 5. Escalation Agent
-
-**Responsibility:** Monitor SLA deadlines and escalate overdue items
-
-**Triggers:**
-
-- Current time > SLA deadline
-- Approval still pending
-- Multiple escalations (escalation_count > threshold)
-
-**Actions:**
-
-1. Log escalation event
-2. Update approval status to ESCALATED
-3. Notify backup reviewer
-4. Increment escalation count
-5. Flag for senior review
-
-**Implementation:** `workflows/nodes.py` → `escalation_node()`
-
----
-
-### 6. Auditor Agent
-
-**Responsibility:** Compliance logging and audit trail creation
-
-**Audit Events Logged:**
-
-```json
-{
-  "event_id": "uuid",
-  "timestamp": "ISO-8601",
-  "document_id": "DOC-001",
-  "agent": "classifier_agent",
-  "action": "classify_document",
-  "outcome": "success|failure",
-  "metadata": {
-    "document_type": "policy_memo",
-    "sensitivity": "fouo",
-    "confidence": 0.95
-  }
-}
+```text
+Local CLI                         AWS (reference, not deployed in audit)
+─────────                         ──────────────────────────────────────
+python -m agents.demo             S3 event / API Gateway
+        │                                  │
+        ▼                                  ▼
+SupervisorAgent                   lambda/intake_handler.py
+        │                                  │
+        └──────────────┬───────────────────┘
+                       ▼
+              LangGraph workflow
+                       │
+      ┌────────────────┼────────────────┐
+      ▼                ▼                ▼
+  IntakeAgent     ClassifierAgent   RouterAgent
+      │                │                │
+  Comprehend/      Bedrock or       rule engine +
+  Textract/regex   local demo       SLA mapping
+                       │
+                       ▼
+              approval → escalation → audit
+                       │
+                       ▼
+              AuditorAgent → DynamoDB (live)
 ```
 
-**Storage:**
+- **Local demo:** `DEMO_MODE=true`, `USE_COMPREHEND=false`. No network calls.
+- **Live:** Bedrock/Comprehend/Textract/DynamoDB are called via boto3. This path
+  was not exercised because no authorization was given to make billable AWS
+  calls or change cloud resources.
 
-- CloudTrail: All AWS API calls
-- DynamoDB: Document-specific audit trail
-- S3: Long-term archive with Object Lock
+## 2. Workflow Graph
 
-**Implementation:** `agents/auditor_agent.py`
+`workflows/graph.py` builds a LangGraph `StateGraph[TriageState]`:
 
----
-
-## Data Flow
-
-### Document Processing Pipeline
-
-```
-1. Source Documents
-   ├─ S3 Upload (S3 event trigger)
-   ├─ API Gateway (HTTP POST)
-   └─ Direct Lambda invocation (testing)
-
-2. Intake Processing
-   ├─ Read document from S3
-   ├─ Normalize formatting
-   ├─ Detect PII (Comprehend)
-   ├─ Redact sensitive data
-   └─ Store redacted content
-
-3. Classification
-   ├─ Send redacted content to Bedrock
-   ├─ Claude 3 Sonnet processes
-   ├─ Parse JSON response
-   ├─ Validate response schema
-   └─ Map to enums
-
-4. Routing Decision
-   ├─ Look up routing rule
-   ├─ Assign primary queue
-   ├─ Assign backup queue
-   ├─ Calculate SLA deadline
-   └─ Identify reviewers
-
-5. Approval Workflow
-   ├─ Notify reviewer (SNS)
-   ├─ Wait for human decision
-   ├─ Accept: approved/rejected/delegated
-   └─ Update status
-
-6. Monitoring & Escalation
-   ├─ Check SLA deadline
-   ├─ If overdue: escalate
-   ├─ Notify backup reviewer
-   └─ Increment escalation count
-
-7. Compliance Logging
-   ├─ Collect all audit events
-   ├─ Store in DynamoDB (7-year retention)
-   ├─ Archive to S3 with Object Lock
-   └─ CloudTrail captures all API calls
+```text
+intake ──ok──▶ classify ──ok──▶ route ──ok──▶ approval
+  │ error         │ error          │ error        │
+  └──retry≤3──────┘                │              ├─ IN_REVIEW ─▶ escalation ─┐
+  └──exhausted────▶ audit ◀────────┘              └─ else ───────────────────┤
+                                                error ──────────────────────▶┘
+                                                                              ▼
+                                                                            audit
 ```
 
----
+- Each processing node gets **3 retries (4 attempts total)**. On exhaustion the
+  graph short-circuits to `audit` with the error preserved;
+  `processing_complete` is `False`. It does not continue with empty state.
+- Successful nodes reset `retry_count` to `0`, giving each node its own budget.
+- `audit` is terminal.
+- **Escalation is a no-op within one run.** The routing deadline is created
+  immediately before the check, so only restored state can be overdue. Persistent
+  scheduling/reload is not implemented.
 
-## State Management
+## 3. State
 
-### TriageState TypedDict
+`workflows/state.py` defines `TriageState` as a `TypedDict`, plus enums for
+document type, sensitivity, urgency, approval status, and routing queue.
 
-The workflow state is managed as a TypedDict (Python 3.8+) passed between nodes:
+Key fields:
 
-```python
-class TriageState(TypedDict):
-    # Input
-    document_id: str
-    document_s3_key: str
-    document_content: str
-    document_content_redacted: str
-    intake_timestamp: str  # ISO-8601
+| Field | Meaning |
+| --- | --- |
+| `document_content` | Raw input (not persisted by Lambda state writes) |
+| `document_content_redacted` | PII-redacted content sent to the classifier |
+| `pii_detection` | Entity types/count/spans, redaction flag |
+| `classification` | Type, sensitivity, urgency, subject, summary, action, agency, keywords, confidence |
+| `routing` | Primary/backup queue, reviewers, SLA, rationale, applied rule |
+| `approval_status` | `PENDING`, `IN_REVIEW`, `APPROVED`, `ESCALATED`, etc. |
+| `audit_trail` | Per-document events |
+| `audit_persisted` | Whether DynamoDB accepted the events |
+| `audit_persistence_mode` | `in_memory_demo` or `dynamodb` |
+| `error`, `retry_count` | Failure/retry state |
+| `processing_complete` | True only when no error and audit handling succeeded |
 
-    # PII Detection
-    pii_detection: Optional[PIIDetection]
+## 4. Components
 
-    # Classification
-    classification: Optional[ClassificationResult]
+### IntakeAgent (`agents/intake_agent.py`)
 
-    # Routing
-    routing: Optional[RoutingDecision]
+1. Normalizes whitespace.
+2. Detects PII with Comprehend (`detect_pii_entities`, confidence filtered by
+   `REDACTION_CONFIDENCE_THRESHOLD`) or the regex fallback when
+   `USE_COMPREHEND=false`, Comprehend raises, or the document exceeds 100 KB.
+3. Merges overlapping regex spans, preferring the longest, then redacts from
+   right to left with `[REDACTED:TYPE]`.
+4. Provides Textract polling for PDFs from `bucket/key` S3 paths (mocked tests
+   only; not live-verified).
 
-    # Approval
-    approval_status: ApprovalStatus
-    approval_reviewer: Optional[str]
-    approval_timestamp: Optional[str]
-    approval_notes: Optional[str]
-    escalation_count: int
+### ClassifierAgent (`agents/classifier_agent.py`)
 
-    # Audit
-    audit_trail: List[AuditEvent]
+- Sanitizes `document_id` to `[A-Za-z0-9_-]{1,256}`.
+- Uses a prompt with the document inside `<document>` tags, explicitly marked as
+  untrusted data; truncates at `MAX_CLASSIFICATION_CHARS` (default 60,000).
+- **Demo mode:** deterministic keyword rules for type, sensitivity, urgency,
+  subject, agency, action, and confidence.
+- **Live mode:** Bedrock Claude 3 Sonnet by default. On failure it **raises**
+  unless `ALLOW_CLASSIFIER_FALLBACK=true`; this prevents silent heuristic
+  substitution for controlled documents.
+- Normalizes/clamps the model response (invalid enums fall back safely,
+  confidence clamped to 0.0–1.0, keywords coerced to a list of strings).
 
-    # Error handling
-    error: Optional[str]
-    retry_count: int
+### RouterAgent (`agents/router_agent.py`)
 
-    # Metadata
-    processing_complete: bool
-    workflow_version: str
-```
+1. Exact `(document_type, sensitivity)` rule.
+2. Document-type default (e.g., contract → contracting officer) when no exact
+   sensitivity rule exists.
+3. Global default (`general_queue` / legal counsel).
 
-**Implementation:** `workflows/state.py`
+This fixes the prior bug where an SBU contract fell through to the general
+queue. SLA overrides are read from `DEFAULT_SLA_*` environment variables.
+Reviewer IDs are hardcoded placeholders and must be replaced before production.
 
----
+### Approval (`workflows/nodes.py`)
 
-## Security & Compliance
+Auto-approve **only** documents that are both:
 
-### Encryption
+- `sensitivity_level == unclassified`, and
+- `confidence_score > AUTO_APPROVAL_CONFIDENCE_THRESHOLD` (default 0.85,
+  strict `>`).
 
-**At Rest:**
+CUI, SBU, and FOUO documents always go to `IN_REVIEW` with the primary reviewer,
+regardless of confidence. The approval event records whether auto-approval or
+human review was chosen.
 
-- S3: AES-256 with customer-managed KMS keys
-- DynamoDB: KMS encryption (optional)
-- Secrets: AWS Secrets Manager (auto-rotated)
+### Escalation (`workflows/nodes.py`)
 
-**In Transit:**
+Compares the stored `sla_deadline` plus a 1-hour grace period against current
+UTC time, logs an escalation, increments `escalation_count`, and sets
+`ESCALATED`. As noted above, a fresh run cannot trigger it.
 
-- All APIs: TLS 1.2+
-- Bedrock: HTTPS encrypted
-- S3: HTTPS enforced via bucket policy
+### Auditor (`agents/auditor_agent.py`, `workflows/audit_context.py`)
 
-### Audit Logging
+- Every `SupervisorAgent.process_document()` call opens a fresh auditor in a
+  `ContextVar`. This isolates audit trails for concurrent documents and prevents
+  one document's `clear_audit_trail()` from deleting another's events.
+- Live mode persists to DynamoDB using the Terraform table schema:
+  `document_id` (partition), `timestamp` (sort). Events without a
+  `document_id` are rejected.
+- If persistence fails, the workflow stays incomplete (`processing_complete=False`)
+  and the error is retained.
+- Demo mode intentionally skips DynamoDB and reports
+  `audit_persistence_mode=in_memory_demo`.
 
-**CloudTrail:**
+## 5. Lambda Handlers (`lambda/intake_handler.py`)
 
-- All AWS API calls logged
-- 7-year retention (NARA compliance)
-- Immutable with log file validation
+- **S3 handler:** reads an object, validates the document ID/size, runs the
+  workflow, and writes sanitized state to `STATE_DYNAMODB_TABLE`.
+- **API Gateway handler:** decodes plain or base64 JSON body, validates
+  ID/encoding/size, runs the workflow, writes sanitized state, and returns
+  `SupervisorAgent.get_workflow_status()`.
+- State writes remove `document_content` and `document_content_redacted`.
+  `None`/empty values are removed, floats become `Decimal`, enums become values.
+- Errors return generic JSON messages; details stay in server logs.
 
-**DynamoDB Audit Trail:**
+## 6. Infrastructure (`terraform/`)
 
-- Document-specific events
-- Full audit history preserved
-- Query by document_id or timestamp
+Implemented and statically validated:
 
-### Access Control
+- VPC, public/private/database subnets, NAT gateways, route tables, flow logs.
+- KMS keys for S3 and DynamoDB; encrypted/versioned S3 buckets with public
+  access blocks; archive bucket with Object Lock.
+- DynamoDB audit table (`document_id` + `timestamp`) and state table.
+- CloudTrail with log-file validation, CloudWatch Logs, S3 bucket policies,
+  partition-aware data-resource ARNs.
+- S3 server-access-log delivery policy for the archive bucket.
+- Optional GuardDuty detector and Security Hub account.
 
-**IAM Policies:**
+**Not implemented:** Lambda function, API Gateway, S3 event notification, SNS/
+SES notifications, Step Functions, reviewer directory, document archive writes,
+and S3 Object Lock uploads. `terraform apply` was not run. See the deployment
+status in the README.
 
-- Lambda execution role: S3 read/write, DynamoDB write, Bedrock invoke
-- Reviewer role: DynamoDB read, API Gateway invoke
-- Admin role: Full access (least needed)
+## 7. Security-Relevant Behavior
 
-**Network Security:**
+| Control | Implementation | Verification |
+| --- | --- | --- |
+| PII redaction before LLM | Intake agent, Comprehend/regex | Unit + E2E tests |
+| Sensitive docs require human review | Approval policy | Unit + E2E tests |
+| Prompt injection hardening | Sanitized ID, tagged untrusted text, truncation | Classifier tests |
+| No silent classifier fallback | `ALLOW_CLASSIFIER_FALLBACK` off by default | Classifier test |
+| Audit isolation | ContextVar per workflow | Concurrency test |
+| No document bodies in state table | Lambda sanitizer | Lambda test |
+| Non-root container | Dockerfile `appuser` | Docker build/run |
+| No secrets in image | `.dockerignore` | Image inspection |
+| Dependency vulnerabilities | Upgraded pins; `pip-audit` clean | Audit log |
 
-- VPC endpoints for AWS services (no internet routing)
-- Security groups restrict ingress to HTTPS (443)
-- NACLs deny unnecessary protocols
+Not implemented/verified: IAM execution roles for Lambda, KMS grants for runtime,
+SNS notifications, FedRAMP authorization, dynamic reviewer lookup, live PII
+engine accuracy, and live AWS API behavior.
 
----
+## 8. Performance
 
-## Performance Characteristics
+No load or latency benchmark was run. The code's per-document cost is dominated
+by external AWS calls (Comprehend/Textract/Bedrock/DynamoDB) in live mode; demo
+mode is in-memory Python. Do not rely on the unverified throughput numbers that
+appeared in earlier documentation.
 
-### Throughput
+## 9. Extending the System
 
-- **Intake:** ~1000 docs/second (limited by Comprehend)
-- **Classification:** ~50 docs/second (Bedrock API limit)
-- **Routing:** ~10000 docs/second (in-memory rules)
-- **Overall:** ~50 docs/second end-to-end
+### New document type
 
-### Latency
+1. Add the enum to `workflows/state.py`.
+2. Add classifier keywords/prompt mapping and route defaults.
+3. Add tests in `tests/test_classifier.py`, `tests/test_router.py`, and
+   `tests/test_workflow.py`.
+4. Update docs and sample expectations.
 
-| Phase                    | Latency       | Bottleneck                |
-| ------------------------ | ------------- | ------------------------- |
-| Intake (Comprehend)      | 500-2000ms    | AWS Comprehend API        |
-| Classification (Bedrock) | 2000-5000ms   | Claude 3 Sonnet inference |
-| Routing                  | 50-100ms      | DynamoDB lookup           |
-| Approval (wait)          | Minutes-days  | Human decision            |
-| Total                    | 2.5-7 seconds | Bedrock classification    |
+### New queue/reviewer source
 
-### Storage
+1. Add the enum and mapping in `agents/router_agent.py`.
+2. Replace `_get_reviewer_for_queue` with a staff-directory lookup and keep the
+   current IDs as a test fallback.
+3. Add routing and integration tests.
 
-**Per Document:**
+### Real human-in-the-loop
 
-- Original content: ~100KB average
-- Audit trail: ~2KB per event
-- Workflow state: ~5KB
-
-**7-Year Retention (10,000 docs/year):**
-
-- S3 storage: ~7GB original content
-- DynamoDB: ~700MB audit events
-- Annual cost: ~$150-200
-
----
-
-## Error Handling
-
-### Retry Strategy
-
-```python
-if retry_count < 3:
-    # Retry with exponential backoff
-    wait_time = 2 ** retry_count  # 2s, 4s, 8s
-    re_invoke_node()
-else:
-    # Escalate to manual review
-    update_status(ApprovalStatus.ESCALATED)
-    notify_admin()
-```
-
-### Graceful Degradation
-
-- **Comprehend unavailable:** Fall back to regex PII detection
-- **Bedrock timeout:** Retry 3x, then mark as "unknown" type
-- **DynamoDB write failure:** Log to CloudWatch, retry via SQS queue
-
----
-
-## Extensibility
-
-### Adding New Document Types
-
-1. Add to `DocumentType` enum in `workflows/state.py`
-2. Add routing rule in `RouterAgent.ROUTING_RULES`
-3. Update Bedrock prompt in `ClassifierAgent`
-4. Add test case in `tests/test_classifier.py`
-
-### Adding New Routing Queues
-
-1. Add to `RoutingQueue` enum in `workflows/state.py`
-2. Add queue-to-reviewer mapping in `RouterAgent._get_reviewer_for_queue()`
-3. Update documentation
-
-### Custom Classifiers
-
-Replace Bedrock with any LLM:
-
-```python
-# Alternative: Use local model
-from transformers import pipeline
-
-classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
-result = classifier(text, candidate_labels=["contract", "foia", ...])
-```
+Implement persistence and notification outside the single-run graph (for example
+Step Functions + SNS/SES + DynamoDB), then add a callback that records the
+decision and re-enters the audit path. This is currently a documented gap, not a
+working feature.
 
 ---
 
-## Deployment Diagram
-
-```
-┌─────────────────────────────────────────────────────────┐
-│               AWS GovCloud (us-gov-west-1)               │
-├─────────────────────────────────────────────────────────┤
-│                                                           │
-│  ┌─ Internet Gateway ─┐                                  │
-│  │                     │                                  │
-│  ├─ Public Subnet (ALB)                                  │
-│  │  └─ Application Load Balancer (HTTPS)                │
-│  │                                                       │
-│  ├─ Private Subnet (Lambda)                             │
-│  │  ├─ Lambda: intake_handler                           │
-│  │  ├─ Lambda: approval_handler                         │
-│  │  └─ Lambda: escalation_handler                       │
-│  │                                                       │
-│  ├─ Database Subnet (DynamoDB)                          │
-│  │  ├─ DynamoDB: audit_trail                            │
-│  │  └─ DynamoDB: workflow_state                         │
-│  │                                                       │
-│  └─ Storage                                              │
-│     ├─ S3: intake_bucket (encrypted)                    │
-│     ├─ S3: archive_bucket (Object Lock, WORM)           │
-│     └─ S3: cloudtrail_bucket (immutable)                │
-│                                                           │
-│  ┌─ Security Services ─┐                                │
-│  ├─ CloudTrail (API logging)                            │
-│  ├─ GuardDuty (threat detection)                        │
-│  ├─ Security Hub (compliance)                           │
-│  ├─ KMS (key management)                                │
-│  └─ Secrets Manager (credential storage)                │
-│                                                           │
-└─────────────────────────────────────────────────────────┘
-
-External Services (AWS)
-├─ AWS Bedrock (Claude 3 Sonnet for classification)
-├─ AWS Comprehend (PII detection)
-├─ SNS (reviewer notifications)
-└─ CloudWatch (monitoring & logging)
-```
-
----
-
-**Last Updated:** 2026-05-06  
-**Architecture Version:** 1.0  
-**FedRAMP Alignment:** Moderate Baseline (91.7% control coverage)
+**Architecture version:** 2.0
+**Last verified:** 2026-11-01

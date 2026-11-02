@@ -2,186 +2,174 @@
 
 ## Reporting Security Vulnerabilities
 
-If you discover a security vulnerability in the Federal Document Triage Agent, please email security@beeasenterprises.com with:
+If you discover a security vulnerability in the Federal Document Triage Agent,
+please email **security@beeasenterprises.com** with:
 
 - Description of the vulnerability
 - Steps to reproduce
 - Potential impact
 - Suggested fix (if available)
 
-**Please do not publicly disclose security vulnerabilities** until BE EASY ENTERPRISES has had time to address them.
+Please do not publicly disclose the issue until BE EASY ENTERPRISES has had time
+to address it.
 
 ---
 
-## Security Controls
+## Scope and Verification Status
 
-This project implements NIST SP 800-53 Moderate baseline security controls. See `FEDRAMP-ALIGNMENT.md` for detailed control mappings.
+This repository is a **reference implementation**, not an authorized federal
+system. `FEDRAMP-ALIGNMENT.md` maps intended controls; it is **not** an
+authorization, assessment, or evidence of FedRAMP compliance. No independent
+penetration test, 3PAO assessment, or live AWS security review was performed.
 
-### Key Security Features
+The security properties below were verified locally by tests (see
+[`docs/evidence/verification-report.md`](docs/evidence/verification-report.md)).
+Properties marked **not verified** require a deployed AWS environment and were
+not exercised in this audit.
 
-#### Authentication & Authorization
+---
 
-- AWS IAM with least-privilege service roles
-- MFA enforcement via Cognito
-- Service-to-service authentication via IAM
-- No hardcoded credentials (use AWS Secrets Manager)
+## Implemented and Tested
 
-#### Data Protection
+### Data protection
 
-- AES-256 encryption at rest (S3, RDS, EBS via KMS)
-- TLS 1.2+ encryption in transit
-- PII redaction via AWS Comprehend + regex patterns
-- S3 Object Lock for immutable audit logs (7-year NARA retention)
+- PII detection/redaction before classification:
+  - AWS Comprehend when `USE_COMPREHEND=true` and the document is ≤100 KB;
+  - regex fallback for demo mode, Comprehend failures, or oversized input.
+  - Overlapping spans are merged (longest wins) before right-to-left redaction.
+- Lambda workflow-state writes **exclude** raw and redacted document bodies.
+- Audit events are scoped per workflow invocation via a `ContextVar`, preventing
+  cross-document audit contamination under concurrent processing.
+- Audit persistence failure marks the workflow incomplete instead of silently
+  claiming success.
 
-#### Logging & Auditing
+### Approval controls
 
-- AWS CloudTrail for all API calls
-- DynamoDB audit trail for all document processing
-- CloudWatch Logs for application events
-- Signed CloudTrail log file validation
+- CUI, SBU, and FOUO documents **cannot** be auto-approved, regardless of model
+  confidence.
+- Auto-approval is limited to unclassified documents above the configured
+  confidence threshold (default 0.85, strict `>`).
 
-#### Network Security
+### AI input handling
 
-- VPC isolation with private subnets
-- Security groups enforce least privilege
-- Network ACLs restrict traffic
-- VPC endpoints for AWS API calls (no internet routing)
+- Document IDs are sanitized before being placed in the prompt.
+- Document text is wrapped in `<document>` tags and explicitly labeled untrusted.
+- Classifier input is truncated (`MAX_CLASSIFICATION_CHARS`, default 60,000).
+- Local heuristic fallback after a Bedrock failure is **off by default**
+  (`ALLOW_CLASSIFIER_FALLBACK=false`), so an AWS failure is visible rather than
+  silently producing a heuristic decision.
+- Model output enums/values are validated and clamped.
 
-#### Secrets Management
+### API/Lambda input handling
 
-- AWS Secrets Manager for credential storage
-- Automatic credential rotation
-- No secrets in environment variables or code
-- Least-privilege IAM for secrets access
+- Document IDs are validated (`[A-Za-z0-9_-]{1,256}`).
+- API Gateway request bodies are size-limited (`MAX_DOCUMENT_SIZE_MB`) and
+  base64 decoding is strict.
+- Error responses do not echo raw exception text to callers.
+- DynamoDB items are sanitized (no `None`/empty collections, floats as
+  `Decimal`, enums as values).
 
-#### Code Security
+### Supply chain and container
 
-- No hardcoded AWS keys, API tokens, or credentials
-- Input validation on all API endpoints
-- Output encoding to prevent injection
-- Dependency scanning (via pip-audit, Dependabot)
+- Dependencies are pinned; `pip-audit[^1]` reported **no known vulnerabilities**
+  after the audit upgrades.
+- The container runs as non-root `appuser`.
+- `.dockerignore` excludes `.env`, virtualenvs, tests, docs, Terraform state, and
+  git metadata. Verified: the built image does not contain `/app/.env`.
+- The Docker health check imports and compiles the workflow graph; it does not
+  expose an HTTP endpoint (there is no HTTP server).
+
+[^1]: Verified 2026-11-01; re-run `python -m pip_audit -r requirements.txt`.
+
+---
+
+## Not Implemented or Not Verified
+
+Do **not** claim these controls based on this repository alone:
+
+| Area | Gap |
+| --- | --- |
+| Lambda execution IAM | No Lambda function/role is provisioned in Terraform; least-privilege runtime policies were not created or tested |
+| Network isolation | Terraform creates a VPC and flow logs, but Lambda/VPC endpoints/security groups for the application are not wired |
+| Reviewer notifications | No SNS/SES/Step Functions human-in-the-loop implementation |
+| Secrets management | No Secrets Manager integration; environment variables are used for settings, AWS SDK credentials come from the standard provider chain |
+| Authentication/authorization | No Cognito/MFA/API authorization layer exists |
+| Archive/WORM | Terraform creates an Object Lock bucket, but no code writes processed documents to it |
+| CloudTrail integration | CloudTrail is infrastructure-only; the app does not query it |
+| PII engine accuracy | Comprehend and Textract paths were mocked, not live-validated |
+| Incident response | No `docs/incident-response.md` or tested runbook exists |
+| FedRAMP/FISMA | No authorization, assessment, or continuous-monitoring evidence |
+
+`RDS`, `EBS`, `Cognito`, `Secrets Manager`, `WAF`, and `Istio` are not used by
+this repository. Older documentation that referenced them was inaccurate.
 
 ---
 
 ## Development Security Practices
 
-### Pre-Commit Hooks
-
-Enable pre-commit hooks to catch common security issues:
+### Dependency audit
 
 ```bash
-pip install pre-commit
-pre-commit install
+python -m pip_audit -r requirements.txt
 ```
 
-### Dependency Scanning
-
-Regularly audit Python dependencies:
+### Tests and lint
 
 ```bash
-pip-audit
+python -m pytest tests/ -v --cov=agents --cov=workflows
+ruff check agents workflows tests lambda test_local.py
 ```
 
-### Code Review
+### Code review checklist
 
-All code changes require review before merging. Reviewers should:
+- No hardcoded AWS keys, passwords, tokens, or account-specific values.
+- No raw document content in logs, DynamoDB state items, or error responses.
+- PII redaction happens before any external LLM call.
+- Sensitive documents remain human-reviewed.
+- New external calls have timeouts/error handling and tests with mocks.
+- `.env` is never committed; `.env.example` contains placeholders only.
 
-- Check for hardcoded secrets (AWS keys, passwords, tokens)
-- Verify proper error handling (no stack traces to users)
-- Confirm input validation is present
-- Check for SQL injection / command injection vectors
-- Verify encryption is used for sensitive data
-
-### Testing
-
-Run full test suite before committing:
+### Container
 
 ```bash
-pytest tests/ --cov=agents --cov=workflows
+docker build -t federal-doc-triage-agent .
+docker run --rm federal-doc-triage-agent sh -c 'test ! -f /app/.env'
 ```
 
 ---
 
-## FedRAMP Security Requirements
+## Deployment Security Checklist (Future Work)
 
-This implementation complies with FedRAMP Moderate baseline requirements:
+These are **requirements**, not claims of completion:
 
-### Control Categories
-
-| Category                                | Controls | Status             |
-| --------------------------------------- | -------- | ------------------ |
-| Access Control (AC)                     | 22       | ✓ 91% implemented  |
-| Audit & Accountability (AU)             | 13       | ✓ 100% implemented |
-| Identification & Authentication (IA)    | 11       | ✓ 100% implemented |
-| System & Communications Protection (SC) | 40       | ✓ 95% implemented  |
-| System & Information Integrity (SI)     | 14       | ✓ 100% implemented |
-
-See `FEDRAMP-ALIGNMENT.md` for complete control mapping.
-
----
-
-## Deployment Security
-
-### Pre-Deployment Checklist
-
-- [ ] Enable CloudTrail logging to immutable S3 bucket
-- [ ] Configure KMS customer-managed encryption keys
-- [ ] Enable S3 block-public-access on all buckets
-- [ ] Enable MFA for IAM root account
-- [ ] Configure security groups with least-privilege rules
-- [ ] Enable VPC Flow Logs for network monitoring
-- [ ] Configure GuardDuty for threat detection
-- [ ] Enable AWS Security Hub for compliance dashboard
-- [ ] Enable automatic RDS backups
-- [ ] Configure SNS alerts for security events
-
-### Post-Deployment Verification
-
-```bash
-# Run full test suite with coverage
-pytest tests/ --cov=agents --cov=workflows -v
-
-# Perform dependency security audit
-pip-audit
-```
-
----
-
-## Incident Response
-
-If a security incident is detected:
-
-1. **Isolate** — Disconnect affected systems
-2. **Investigate** — Review CloudTrail and DynamoDB audit logs
-3. **Remediate** — Apply fixes and patches
-4. **Notify** — Contact US-CERT (per FISMA requirements)
-5. **Report** — Submit incident report to OMB (per OMB M-24-10)
-
-See `docs/incident-response.md` for detailed procedures.
+- [ ] Implement the Lambda IAM role with least-privilege S3/DynamoDB/Bedrock/
+      Comprehend/Textract/KMS permissions.
+- [ ] Add VPC endpoints/security groups or explicitly document the network path.
+- [ ] Provision the Lambda function, API Gateway, and S3 event notification.
+- [ ] Replace hardcoded reviewer IDs with an authenticated directory lookup.
+- [ ] Add SNS/SES/Step Functions approval notifications and state persistence.
+- [ ] Add CloudWatch alarms, retention, and audit-failure alerting.
+- [ ] Run live integration tests in a non-production AWS account.
+- [ ] Complete a FedRAMP/security assessment before any production use.
 
 ---
 
 ## Compliance
 
-This project aligns with:
-
-- **NIST SP 800-53 Rev. 5** — Security and Privacy Controls
-- **NIST SP 800-171 Rev. 2** — Protecting CUI in Nonfederal Systems
-- **FedRAMP Security Requirements** — Moderate baseline
-- **FISMA** — Federal Information Security Management Act
-- **OMB M-24-10** — Memorandum for Federal AI Governance
+The repository is *designed with alignment to* NIST SP 800-53 Rev. 5, NIST SP
+800-171 Rev. 2, FedRAMP Moderate concepts, FISMA, and OMB M-24-10. See
+[`FEDRAMP-ALIGNMENT.md`](FEDRAMP-ALIGNMENT.md) for the control mapping and its
+implementation-status banner. Alignment is not authorization.
 
 ---
 
-## Questions?
+## Questions
 
-For security questions or policy clarification, contact:
-
-- **Security**: security@beeasenterprises.com
-- **Compliance**: compliance@beeasenterprises.com
-- **GitHub Issues**: [https://github.com/dbsectrainer/federal-doc-triage-agent/security](https://github.com/dbsectrainer/federal-doc-triage-agent/security)
+- **Security:** security@beeasenterprises.com
+- **Compliance:** compliance@beeasenterprises.com
+- **GitHub Security:** https://github.com/dbsectrainer/federal-doc-triage-agent/security
 
 ---
 
-**Last Updated:** 2026-05-06  
-**Classification:** For Official Use Only (FOUO)
+**Last verified:** 2026-11-01
+**Classification:** Unclassified / public repository

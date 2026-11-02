@@ -1,15 +1,16 @@
 """Tests for router agent."""
 
+from datetime import datetime, timezone
+
 import pytest
-from datetime import datetime, timedelta, timezone
 
 from agents.router_agent import RouterAgent
 from workflows.state import (
+    ClassificationResult,
     DocumentType,
+    RoutingQueue,
     SensitivityLevel,
     Urgency,
-    RoutingQueue,
-    ClassificationResult,
 )
 
 
@@ -162,3 +163,102 @@ def test_routing_rationale(router, sample_classification):
     assert routing["routing_rationale"] is not None
     assert len(routing["routing_rationale"]) > 0
     assert "contract" in routing["routing_rationale"].lower()
+
+
+@pytest.mark.parametrize(
+    "document_type,expected_queue",
+    [
+        (DocumentType.CONTRACT, RoutingQueue.CONTRACTING_OFFICER),
+        (DocumentType.FOIA, RoutingQueue.LEGAL_COUNSEL),
+        (DocumentType.POLICY_MEMO, RoutingQueue.POLICY_OFFICE),
+        (DocumentType.PERSONNEL_ACTION, RoutingQueue.HR_OFFICE),
+        (DocumentType.FINANCIAL, RoutingQueue.FINANCE_OFFICE),
+        (DocumentType.EXECUTIVE_CORRESPONDENCE, RoutingQueue.CHIEF_OF_STAFF),
+        (DocumentType.LEGAL, RoutingQueue.LEGAL_COUNSEL),
+    ],
+)
+def test_sbu_uses_document_type_fallback(router, document_type, expected_queue):
+    """SBU documents without an exact rule must not fall through to general queue."""
+    classification = ClassificationResult(
+        document_type=document_type,
+        sensitivity_level=SensitivityLevel.SENSITIVE_BUT_UNCLASSIFIED,
+        urgency=Urgency.ROUTINE,
+        subject="SBU document",
+        summary="SBU document",
+        action_required="Review",
+        originating_agency=None,
+        keywords=[],
+        confidence_score=0.8,
+    )
+
+    routing = router.route_document("DOC-SBU", classification)
+
+    assert routing["primary_queue"] == expected_queue
+    assert routing["rule_applied"] == f"{document_type.value}:type-default"
+    assert "document-type default" in routing["routing_rationale"]
+
+
+def test_unknown_type_uses_global_default(router):
+    classification = ClassificationResult(
+        document_type=DocumentType.UNKNOWN,
+        sensitivity_level=SensitivityLevel.UNCLASSIFIED,
+        urgency=Urgency.ROUTINE,
+        subject="Unknown",
+        summary="Unknown",
+        action_required="Review",
+        originating_agency=None,
+        keywords=[],
+        confidence_score=0.4,
+    )
+
+    routing = router.route_document("DOC-UNKNOWN", classification)
+
+    assert routing["primary_queue"] == RoutingQueue.GENERAL_QUEUE
+    assert routing["rule_applied"] == "global-default"
+
+
+def test_router_accepts_serialized_enum_values(router):
+    classification = ClassificationResult(
+        document_type="contract",  # type: ignore[typeddict-item]
+        sensitivity_level="cui",  # type: ignore[typeddict-item]
+        urgency="priority",  # type: ignore[typeddict-item]
+        subject="Serialized",
+        summary="Serialized",
+        action_required="Review",
+        originating_agency=None,
+        keywords=[],
+        confidence_score=0.5,
+    )
+
+    routing = router.route_document("DOC-SERIALIZED", classification)
+
+    assert routing["primary_queue"] == RoutingQueue.CONTRACTING_OFFICER
+    assert routing["rule_applied"] == "contract:cui"
+
+
+def test_sla_environment_overrides(monkeypatch):
+    monkeypatch.setenv("DEFAULT_SLA_ROUTINE_DAYS", "2")
+    monkeypatch.setenv("DEFAULT_SLA_EMERGENCY_HOURS", "1")
+    agent = RouterAgent()
+
+    routine_deadline = datetime.fromisoformat(agent.get_sla_deadline(Urgency.ROUTINE))
+    emergency_deadline = datetime.fromisoformat(agent.get_sla_deadline(Urgency.EMERGENCY))
+    now = datetime.now(timezone.utc)
+
+    assert 1.9 < (routine_deadline - now).total_seconds() / 86400 < 2.1
+    assert 0.9 < (emergency_deadline - now).total_seconds() / 3600 < 1.1
+
+
+def test_invalid_sla_environment_uses_defaults(monkeypatch):
+    monkeypatch.setenv("DEFAULT_SLA_PRIORITY_DAYS", "not-a-number")
+    agent = RouterAgent()
+
+    priority_deadline = datetime.fromisoformat(agent.get_sla_deadline(Urgency.PRIORITY))
+    days_remaining = (priority_deadline - datetime.now(timezone.utc)).total_seconds() / 86400
+    assert 4.9 < days_remaining < 5.1
+
+
+def test_sla_deadline_type_is_serializable(router):
+    deadline = router.get_sla_deadline(Urgency.IMMEDIATE)
+    assert isinstance(deadline, str)
+    assert datetime.fromisoformat(deadline).tzinfo is not None

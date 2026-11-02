@@ -1,5 +1,12 @@
 # Federal Document Triage Agent — React Frontend Roadmap
 
+> **Planning document only.** No frontend exists in this repository as of the
+> 2026-11-01 audit. The current deliverable is a CLI/Lambda backend. The API
+> endpoints, authentication, and backend features referenced below are proposed
+> work, not implemented functionality. See the verified status in
+> [`README.md`](README.md) and
+> [`docs/evidence/verification-report.md`](docs/evidence/verification-report.md).
+
 **Status:** Planning Phase | **Last Updated:** 2026-05-06
 
 ---

@@ -35,10 +35,10 @@ module "vpc" {
   source = "./modules/vpc"
 
   project_name          = var.project_name
-  vpc_cidr             = var.vpc_cidr
-  availability_zones   = var.availability_zones
-  public_subnet_cidrs  = var.public_subnet_cidrs
-  private_subnet_cidrs = var.private_subnet_cidrs
+  vpc_cidr              = var.vpc_cidr
+  availability_zones    = var.availability_zones
+  public_subnet_cidrs   = var.public_subnet_cidrs
+  private_subnet_cidrs  = var.private_subnet_cidrs
   database_subnet_cidrs = var.database_subnet_cidrs
 
   tags = var.tags
@@ -130,7 +130,7 @@ resource "aws_s3_bucket_object_lock_configuration" "archive_bucket" {
   rule {
     default_retention {
       mode = "GOVERNANCE"
-      days = 2555  # 7 years per NARA
+      days = 2555 # 7 years per NARA
     }
   }
 
@@ -144,7 +144,10 @@ resource "aws_s3_bucket_logging" "intake" {
   target_bucket = aws_s3_bucket.archive_bucket.id
   target_prefix = "intake-logs/"
 
-  depends_on = [aws_s3_bucket_public_access_block.archive_bucket]
+  depends_on = [
+    aws_s3_bucket_public_access_block.archive_bucket,
+    aws_s3_bucket_policy.archive_log_delivery,
+  ]
 }
 
 resource "aws_s3_bucket_logging" "archive" {
@@ -153,7 +156,10 @@ resource "aws_s3_bucket_logging" "archive" {
   target_bucket = aws_s3_bucket.archive_bucket.id
   target_prefix = "archive-logs/"
 
-  depends_on = [aws_s3_bucket_public_access_block.archive_bucket]
+  depends_on = [
+    aws_s3_bucket_public_access_block.archive_bucket,
+    aws_s3_bucket_policy.archive_log_delivery,
+  ]
 }
 
 resource "aws_s3_bucket_logging" "cloudtrail" {
@@ -162,7 +168,44 @@ resource "aws_s3_bucket_logging" "cloudtrail" {
   target_bucket = aws_s3_bucket.archive_bucket.id
   target_prefix = "cloudtrail-logs/"
 
-  depends_on = [aws_s3_bucket_public_access_block.archive_bucket]
+  depends_on = [
+    aws_s3_bucket_public_access_block.archive_bucket,
+    aws_s3_bucket_policy.archive_log_delivery,
+  ]
+}
+
+# S3 server access logging requires the target bucket policy to authorize the
+# S3 log delivery service.  Without this, bucket logging configuration fails or
+# logs are silently not delivered when ACLs are disabled.
+resource "aws_s3_bucket_policy" "archive_log_delivery" {
+  bucket = aws_s3_bucket.archive_bucket.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3ServerAccessLogsDelivery"
+        Effect = "Allow"
+        Principal = {
+          Service = "logging.s3.amazonaws.com"
+        }
+        Action   = "s3:PutObject"
+        Resource = "${aws_s3_bucket.archive_bucket.arn}/*"
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+          ArnLike = {
+            "aws:SourceArn" = [
+              aws_s3_bucket.intake_bucket.arn,
+              aws_s3_bucket.archive_bucket.arn,
+              aws_s3_bucket.cloudtrail_bucket.arn,
+            ]
+          }
+        }
+      },
+    ]
+  })
 }
 
 # KMS Key for Encryption
@@ -274,12 +317,12 @@ resource "aws_cloudtrail" "main" {
 
     data_resource {
       type   = "AWS::S3::Object"
-      values = ["arn:aws:s3:::*"]
+      values = ["arn:${data.aws_partition.current.partition}:s3:::*"]
     }
 
     data_resource {
       type   = "AWS::Lambda::Function"
-      values = ["arn:aws:lambda:*:*:function/*"]
+      values = ["arn:${data.aws_partition.current.partition}:lambda:*:*:function/*"]
     }
   }
 
@@ -328,7 +371,7 @@ resource "aws_iam_role_policy" "cloudtrail_cloudwatch" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Effect   = "Allow"
+        Effect = "Allow"
         Resource = [
           aws_cloudwatch_log_group.cloudtrail_logs.arn,
           "${aws_cloudwatch_log_group.cloudtrail_logs.arn}:*"
@@ -410,8 +453,23 @@ resource "aws_s3_bucket_policy" "cloudtrail" {
   })
 }
 
-# Data source for current AWS account
+# Optional security services.  These are account-level services; enabling them
+# here does not install the application's Lambda function or API layer.
+resource "aws_guardduty_detector" "main" {
+  count  = var.enable_guardduty ? 1 : 0
+  enable = true
+
+  tags = merge(var.tags, { Name = "guardduty-detector" })
+}
+
+resource "aws_securityhub_account" "main" {
+  count                    = var.enable_security_hub ? 1 : 0
+  enable_default_standards = false
+}
+
+# Data sources for current AWS account and partition
 data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
 
 # Outputs
 output "intake_bucket_name" {

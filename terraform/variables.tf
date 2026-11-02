@@ -84,7 +84,7 @@ variable "bedrock_model_id" {
 variable "document_retention_days" {
   description = "Number of days to retain documents in archive"
   type        = number
-  default     = 2555  # 7 years for NARA compliance
+  default     = 2555 # 7 years for NARA compliance
 }
 
 variable "enable_guardduty" {

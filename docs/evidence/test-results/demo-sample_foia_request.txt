@@ -1,0 +1,60 @@
+INFO agents.supervisor: Starting document triage for DEMO-SAMPLE_FOIA_REQUEST
+INFO agents.classifier_agent: DEMO_MODE enabled — using local rule-based classification
+INFO agents.supervisor: Document triage complete for DEMO-SAMPLE_FOIA_REQUEST: status=ApprovalStatus.IN_REVIEW
+
+============================================================
+Federal Document Triage Agent - Demo
+============================================================
+Processing: sample_foia_request.txt
+Content length: 2395 bytes
+
+
+============================================================
+WORKFLOW STATUS
+============================================================
+document_id................... DEMO-SAMPLE_FOIA_REQUEST
+status........................ in_review
+document_type................. foia
+sensitivity................... unclassified
+urgency....................... immediate
+assigned_queue................ legal_counsel
+assigned_reviewer............. legal-counsel-001
+sla_deadline.................. 2026-11-03T02:19:17.691674+00:00
+has_pii....................... True
+escalations................... 0
+complete...................... True
+error......................... None
+
+============================================================
+CLASSIFICATION DETAILS
+============================================================
+Subject:          Freedom of Information Act Request
+Summary:          Local demo classification identified this as a foia document with UNCLASSIFIED sensitivity.
+Action Required:  Forward to legal counsel for FOIA processing
+Agency:           U.S. Department of Justice
+Keywords:         freedom of information act, foia request,  foia 
+Confidence:       85.00%
+
+============================================================
+ROUTING DETAILS
+============================================================
+Primary Queue:    legal_counsel
+Backup Queue:     policy_office
+Primary Reviewer: legal-counsel-001
+Backup Reviewer:  policy-officer-001
+SLA Deadline:     2026-11-03T02:19:17.691674+00:00
+Rule Applied:     foia:unclassified
+
+============================================================
+PII DETECTION
+============================================================
+PII Detected:     True
+Entity Types:     EMAIL, PHONE
+Entity Count:     4
+Redaction Applied: True
+
+Full result saved to: sample_foia_request_result.json
+Audit events: 5 (persistence: in_memory_demo)
+============================================================
+
+DEMO RESULT: PASS

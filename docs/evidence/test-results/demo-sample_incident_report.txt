@@ -1,0 +1,60 @@
+INFO agents.supervisor: Starting document triage for DEMO-SAMPLE_INCIDENT_REPORT
+INFO agents.classifier_agent: DEMO_MODE enabled — using local rule-based classification
+INFO agents.supervisor: Document triage complete for DEMO-SAMPLE_INCIDENT_REPORT: status=ApprovalStatus.IN_REVIEW
+
+============================================================
+Federal Document Triage Agent - Demo
+============================================================
+Processing: sample_incident_report.txt
+Content length: 3936 bytes
+
+
+============================================================
+WORKFLOW STATUS
+============================================================
+document_id................... DEMO-SAMPLE_INCIDENT_REPORT
+status........................ in_review
+document_type................. incident_report
+sensitivity................... cui
+urgency....................... immediate
+assigned_queue................ security_team
+assigned_reviewer............. security-lead-001
+sla_deadline.................. 2026-11-03T02:19:18.344680+00:00
+has_pii....................... True
+escalations................... 0
+complete...................... True
+error......................... None
+
+============================================================
+CLASSIFICATION DETAILS
+============================================================
+Subject:          Incident Report Document
+Summary:          Local demo classification identified this as a incident report document with CUI sensitivity.
+Action Required:  Escalate to security team for investigation
+Agency:           Federal Agency XYZ - Information Security Office
+Keywords:         security incident report, incident report, incident id:
+Confidence:       85.00%
+
+============================================================
+ROUTING DETAILS
+============================================================
+Primary Queue:    security_team
+Backup Queue:     legal_counsel
+Primary Reviewer: security-lead-001
+Backup Reviewer:  legal-counsel-001
+SLA Deadline:     2026-11-03T02:19:18.344680+00:00
+Rule Applied:     incident_report:cui
+
+============================================================
+PII DETECTION
+============================================================
+PII Detected:     True
+Entity Types:     EMAIL, PHONE
+Entity Count:     4
+Redaction Applied: True
+
+Full result saved to: sample_incident_report_result.json
+Audit events: 5 (persistence: in_memory_demo)
+============================================================
+
+DEMO RESULT: PASS

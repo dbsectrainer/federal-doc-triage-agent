@@ -1,0 +1,60 @@
+INFO agents.supervisor: Starting document triage for DEMO-SAMPLE_CONTRACT_MEMO
+INFO agents.classifier_agent: DEMO_MODE enabled — using local rule-based classification
+INFO agents.supervisor: Document triage complete for DEMO-SAMPLE_CONTRACT_MEMO: status=ApprovalStatus.IN_REVIEW
+
+============================================================
+Federal Document Triage Agent - Demo
+============================================================
+Processing: sample_contract_memo.txt
+Content length: 2162 bytes
+
+
+============================================================
+WORKFLOW STATUS
+============================================================
+document_id................... DEMO-SAMPLE_CONTRACT_MEMO
+status........................ in_review
+document_type................. contract
+sensitivity................... sbu
+urgency....................... routine
+assigned_queue................ contracting_officer
+assigned_reviewer............. contracting-officer-001
+sla_deadline.................. 2026-11-12T02:19:16.425703+00:00
+has_pii....................... True
+escalations................... 0
+complete...................... True
+error......................... None
+
+============================================================
+CLASSIFICATION DETAILS
+============================================================
+Subject:          Contract Approval Recommendation - Secure Cloud Infrastructure Services
+Summary:          Local demo classification identified this as a contract document with SBU sensitivity.
+Action Required:  Review and approve contract recommendation
+Agency:           Contracting Officer, Procurement Division
+Keywords:         contract approval, contract number, procurement division, contractual details
+Confidence:       90.00%
+
+============================================================
+ROUTING DETAILS
+============================================================
+Primary Queue:    contracting_officer
+Backup Queue:     legal_counsel
+Primary Reviewer: contracting-officer-001
+Backup Reviewer:  legal-counsel-001
+SLA Deadline:     2026-11-12T02:19:16.425703+00:00
+Rule Applied:     contract:type-default
+
+============================================================
+PII DETECTION
+============================================================
+PII Detected:     True
+Entity Types:     EMAIL, PHONE
+Entity Count:     4
+Redaction Applied: True
+
+Full result saved to: sample_contract_memo_result.json
+Audit events: 5 (persistence: in_memory_demo)
+============================================================
+
+DEMO RESULT: PASS

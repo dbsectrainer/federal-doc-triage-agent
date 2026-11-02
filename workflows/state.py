@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from enum import Enum
-from typing import TypedDict, Optional, List, Dict, Any
 from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional, TypedDict
 
 
 class DocumentType(str, Enum):
@@ -122,6 +122,8 @@ class TriageState(TypedDict):
 
     # --- Audit ---
     audit_trail: List[AuditEvent]
+    audit_persisted: bool
+    audit_persistence_mode: str
 
     # --- Error handling ---
     error: Optional[str]
@@ -149,6 +151,8 @@ def initial_state(document_id: str, s3_key: str, content: str) -> TriageState:
         approval_notes=None,
         escalation_count=0,
         audit_trail=[],
+        audit_persisted=False,
+        audit_persistence_mode="not_started",
         error=None,
         retry_count=0,
         processing_complete=False,

@@ -1,0 +1,103 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.7, pytest-7.4.4, pluggy-1.6.0 -- /Users/newtechlab/Documents/GitHub/federal-doc-triage-agent/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/newtechlab/Documents/GitHub/federal-doc-triage-agent
+configfile: pyproject.toml
+plugins: platformdirs-4.14.3, langsmith-0.14.17, asyncio-0.23.3, cov-4.1.0, anyio-4.15.1
+asyncio: mode=Mode.STRICT
+collecting ... collected 73 items
+
+tests/test_auditor.py::test_persist_uses_table_key_schema PASSED         [  1%]
+tests/test_auditor.py::test_persist_rejects_event_without_document_id PASSED [  2%]
+tests/test_auditor.py::test_persist_empty_trail_is_success PASSED        [  4%]
+tests/test_auditor.py::test_get_audit_trail_returns_copy PASSED          [  5%]
+tests/test_classifier.py::test_classifier_initialization PASSED          [  6%]
+tests/test_classifier.py::test_classifier_initialization_custom_model PASSED [  8%]
+tests/test_classifier.py::test_classify_document_success PASSED          [  9%]
+tests/test_classifier.py::test_classify_document_called_bedrock_correctly PASSED [ 10%]
+tests/test_classifier.py::test_classify_document_demo_mode PASSED        [ 12%]
+tests/test_classifier.py::test_bedrock_failure_raises_without_explicit_fallback PASSED [ 13%]
+tests/test_classifier.py::test_explicit_local_fallback_is_used_when_enabled PASSED [ 15%]
+tests/test_classifier.py::test_confidence_is_clamped PASSED              [ 16%]
+tests/test_classifier.py::test_prompt_wraps_untrusted_content_and_truncates PASSED [ 17%]
+tests/test_classifier.py::test_output_enum_fallback_for_invalid_values PASSED [ 19%]
+tests/test_classifier.py::test_classifier_reads_environment_configuration PASSED [ 20%]
+tests/test_intake.py::test_normalize_document PASSED                     [ 21%]
+tests/test_intake.py::test_no_pii_detected PASSED                        [ 23%]
+tests/test_intake.py::test_email_phone_and_ssn_are_redacted PASSED       [ 24%]
+tests/test_intake.py::test_overlapping_patterns_are_redacted_once PASSED [ 26%]
+tests/test_intake.py::test_date_of_birth_is_redacted PASSED              [ 27%]
+tests/test_intake.py::test_comprehend_entities_are_redacted_by_span PASSED [ 28%]
+tests/test_intake.py::test_large_text_skips_comprehend PASSED            [ 30%]
+tests/test_intake.py::test_redaction_handles_entity_without_spans PASSED [ 31%]
+tests/test_intake.py::test_pdf_extraction_rejects_invalid_key PASSED     [ 32%]
+tests/test_intake.py::test_pdf_extraction_success PASSED                 [ 34%]
+tests/test_intake.py::test_pdf_extraction_reports_failed_job PASSED      [ 35%]
+tests/test_intake.py::test_pdf_extraction_reports_timeout PASSED         [ 36%]
+tests/test_intake.py::test_pdf_extraction_reports_exception PASSED       [ 38%]
+tests/test_intake.py::test_comprehend_confidence_threshold_filters_low_score PASSED [ 39%]
+tests/test_lambda_handler.py::test_clean_for_dynamodb_removes_unsupported_values PASSED [ 41%]
+tests/test_lambda_handler.py::test_build_state_item_excludes_document_bodies PASSED [ 42%]
+tests/test_lambda_handler.py::test_api_handler_rejects_missing_body PASSED [ 43%]
+tests/test_lambda_handler.py::test_api_handler_rejects_invalid_document_id PASSED [ 45%]
+tests/test_lambda_handler.py::test_api_handler_rejects_oversized_document PASSED [ 46%]
+tests/test_lambda_handler.py::test_api_handler_success_persists_without_content PASSED [ 47%]
+tests/test_lambda_handler.py::test_s3_handler_reports_malformed_record PASSED [ 49%]
+tests/test_lambda_handler.py::test_s3_handler_rejects_empty_event PASSED [ 50%]
+tests/test_lambda_handler.py::test_max_document_bytes_invalid_env_uses_default PASSED [ 52%]
+tests/test_lambda_handler.py::test_api_handler_returns_500_for_incomplete_workflow PASSED [ 53%]
+tests/test_lambda_handler.py::test_s3_handler_success_without_content_in_state PASSED [ 54%]
+tests/test_router.py::test_router_initialization PASSED                  [ 56%]
+tests/test_router.py::test_route_contract_document PASSED                [ 57%]
+tests/test_router.py::test_route_foia_document PASSED                    [ 58%]
+tests/test_router.py::test_route_incident_report PASSED                  [ 60%]
+tests/test_router.py::test_sla_deadline_calculation PASSED               [ 61%]
+tests/test_router.py::test_default_routing PASSED                        [ 63%]
+tests/test_router.py::test_routing_rationale PASSED                      [ 64%]
+tests/test_router.py::test_sbu_uses_document_type_fallback[contract-contracting_officer] PASSED [ 65%]
+tests/test_router.py::test_sbu_uses_document_type_fallback[foia-legal_counsel] PASSED [ 67%]
+tests/test_router.py::test_sbu_uses_document_type_fallback[policy_memo-policy_office] PASSED [ 68%]
+tests/test_router.py::test_sbu_uses_document_type_fallback[personnel_action-hr_office] PASSED [ 69%]
+tests/test_router.py::test_sbu_uses_document_type_fallback[financial-finance_office] PASSED [ 71%]
+tests/test_router.py::test_sbu_uses_document_type_fallback[executive_correspondence-chief_of_staff] PASSED [ 72%]
+tests/test_router.py::test_sbu_uses_document_type_fallback[legal-legal_counsel] PASSED [ 73%]
+tests/test_router.py::test_unknown_type_uses_global_default PASSED       [ 75%]
+tests/test_router.py::test_router_accepts_serialized_enum_values PASSED  [ 76%]
+tests/test_router.py::test_sla_environment_overrides PASSED              [ 78%]
+tests/test_router.py::test_invalid_sla_environment_uses_defaults PASSED  [ 79%]
+tests/test_router.py::test_sla_deadline_type_is_serializable PASSED      [ 80%]
+tests/test_workflow.py::test_sample_documents_end_to_end[sample_contract_memo.txt] PASSED [ 82%]
+tests/test_workflow.py::test_sample_documents_end_to_end[sample_executive_correspondence.txt] PASSED [ 83%]
+tests/test_workflow.py::test_sample_documents_end_to_end[sample_foia_request.txt] PASSED [ 84%]
+tests/test_workflow.py::test_sample_documents_end_to_end[sample_incident_report.txt] PASSED [ 86%]
+tests/test_workflow.py::test_concurrent_documents_have_isolated_audit_trails PASSED [ 87%]
+tests/test_workflow.py::test_sensitive_document_never_auto_approved PASSED [ 89%]
+tests/test_workflow.py::test_unclassified_high_confidence_is_auto_approved PASSED [ 90%]
+tests/test_workflow.py::test_unclassified_low_confidence_requires_review PASSED [ 91%]
+tests/test_workflow.py::test_failed_intake_retries_then_audits_without_classifying PASSED [ 93%]
+tests/test_workflow.py::test_audit_persistence_failure_fails_workflow PASSED [ 94%]
+tests/test_workflow.py::test_state_has_audit_fields PASSED               [ 95%]
+tests/test_workflow.py::test_serialized_sensitivity_cannot_be_auto_approved PASSED [ 97%]
+tests/test_workflow.py::test_unknown_sensitivity_fails_closed PASSED     [ 98%]
+tests/test_workflow.py::test_get_workflow_status_accepts_serialized_values PASSED [100%]
+
+---------- coverage: platform darwin, python 3.12.7-final-0 ----------
+Name                         Stmts   Miss  Cover   Missing
+----------------------------------------------------------
+agents/__init__.py              18     16    11%   5-20
+agents/auditor_agent.py         60      6    90%   61, 132, 163, 227-229
+agents/classifier_agent.py     138     14    90%   54, 60, 64, 91-92, 137, 141, 304-305, 309, 315, 320-321, 323
+agents/demo.py                  96     96     0%   3-143
+agents/intake_agent.py         117      6    95%   80-81, 133-136, 192
+agents/router_agent.py          55      0   100%
+agents/supervisor.py            40      5    88%   67-69, 100-101
+workflows/__init__.py            7      4    43%   16-20
+workflows/audit_context.py      11      0   100%
+workflows/graph.py              34      2    94%   72, 75
+workflows/nodes.py             120     21    82%   47-53, 134-136, 154, 175-177, 201, 259-261, 285, 290, 297-303, 310-312
+workflows/state.py              96      0   100%
+----------------------------------------------------------
+TOTAL                          792    170    79%
+
+
+============================== 73 passed in 0.86s ==============================

@@ -1,0 +1,28 @@
+============================================================
+Federal Document Triage Agent - local smoke checks
+============================================================
+PASS: imported IntakeAgent
+PASS: imported ClassifierAgent
+PASS: imported RouterAgent
+PASS: imported AuditorAgent
+PASS: imported SupervisorAgent
+PASS: compiled LangGraph workflow
+PASS: SBU contract routes to contracting officer
+PASS: SLA deadline is timezone-aware
+PASS: audit trail records events
+PASS: audit trail exports JSON
+PASS: initial status pending
+PASS: initial retry count zero
+PASS: initial audit persistence flag
+PASS: four sample documents present
+PASS: sample_contract_memo.txt readable (2162 bytes)
+PASS: sample_executive_correspondence.txt readable (3079 bytes)
+PASS: sample_foia_request.txt readable (2395 bytes)
+PASS: sample_incident_report.txt readable (3936 bytes)
+PASS: S3 Lambda handler present
+PASS: API Gateway handler present
+PASS: state persistence sanitizer present
+PASS: redacted body is excluded from state
+
+All local smoke checks passed.
+AWS services (Bedrock, Comprehend, DynamoDB) were not called.

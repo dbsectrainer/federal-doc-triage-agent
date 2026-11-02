@@ -2,10 +2,11 @@
 
 import asyncio
 import logging
-from typing import Dict, Any
+from typing import Any, Dict
 
-from workflows.state import TriageState, initial_state
+from workflows.audit_context import close_audit_scope, open_audit_scope
 from workflows.graph import create_workflow
+from workflows.state import TriageState, initial_state
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +18,10 @@ class SupervisorAgent:
     Responsibilities:
     1. Initialize workflow state
     2. Invoke the compiled LangGraph
-    3. Handle exceptions and retries
-    4. Return final disposition
+    3. Handle exceptions and return a final disposition
+
+    Each call gets an isolated audit scope so concurrent documents cannot
+    interleave or clear each other's audit trails.
     """
 
     def __init__(self):
@@ -39,6 +42,7 @@ class SupervisorAgent:
         Returns:
             Final workflow state with all classifications, routing, and audit trail
         """
+        token = open_audit_scope()
         try:
             # Initialize workflow state
             state = initial_state(
@@ -47,21 +51,24 @@ class SupervisorAgent:
                 content=content,
             )
 
-            logger.info(f"Starting document triage for {document_id}")
+            logger.info("Starting document triage for %s", document_id)
 
             # Execute workflow
             final_state = await self.workflow.ainvoke(state)
 
             logger.info(
-                f"Document triage complete for {document_id}: "
-                f"status={final_state['approval_status']}"
+                "Document triage complete for %s: status=%s",
+                document_id,
+                final_state["approval_status"],
             )
 
             return final_state
 
-        except Exception as e:
-            logger.error(f"Document triage failed for {document_id}: {str(e)}", exc_info=True)
+        except Exception:
+            logger.exception("Document triage failed for %s", document_id)
             raise
+        finally:
+            close_audit_scope(token)
 
     async def process_documents_batch(
         self, documents: list[Dict[str, str]]
@@ -89,9 +96,14 @@ class SupervisorAgent:
         # Handle any exceptions
         final_results = []
         for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"Batch processing error for doc {i}: {result}")
-                final_results.append({"error": str(result), "document_id": documents[i].get("document_id")})
+            if isinstance(result, BaseException):
+                logger.error("Batch processing error for doc %s: %s", i, result)
+                final_results.append(
+                    {
+                        "error": str(result),
+                        "document_id": documents[i].get("document_id"),
+                    }
+                )
             else:
                 final_results.append(result)
 
@@ -99,16 +111,24 @@ class SupervisorAgent:
 
     def get_workflow_status(self, state: TriageState) -> Dict[str, Any]:
         """Get human-readable workflow status from state."""
+
+        def enum_value(value):
+            return value.value if hasattr(value, "value") else value
+
+        classification = state.get("classification")
+        routing = state.get("routing")
+        pii_detection = state.get("pii_detection")
         return {
             "document_id": state["document_id"],
-            "status": state["approval_status"].value,
-            "document_type": state["classification"]["document_type"].value if state["classification"] else None,
-            "sensitivity": state["classification"]["sensitivity_level"].value if state["classification"] else None,
-            "urgency": state["classification"]["urgency"].value if state["classification"] else None,
-            "assigned_queue": state["routing"]["primary_queue"].value if state["routing"] else None,
-            "assigned_reviewer": state["routing"]["primary_reviewer_id"] if state["routing"] else None,
-            "sla_deadline": state["routing"]["sla_deadline"] if state["routing"] else None,
-            "has_pii": state["pii_detection"]["has_pii"] if state["pii_detection"] else False,
+            "status": enum_value(state["approval_status"]),
+            "document_type": enum_value(classification["document_type"]) if classification else None,
+            "sensitivity": enum_value(classification["sensitivity_level"]) if classification else None,
+            "urgency": enum_value(classification["urgency"]) if classification else None,
+            "assigned_queue": enum_value(routing["primary_queue"]) if routing else None,
+            "assigned_reviewer": routing["primary_reviewer_id"] if routing else None,
+            "sla_deadline": routing["sla_deadline"] if routing else None,
+            "has_pii": pii_detection["has_pii"] if pii_detection else False,
             "escalations": state["escalation_count"],
             "complete": state["processing_complete"],
+            "error": state.get("error"),
         }

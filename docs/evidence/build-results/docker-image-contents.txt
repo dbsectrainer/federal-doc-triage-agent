@@ -1,0 +1,11 @@
+total 36
+drwxr-xr-x 1 appuser appuser 4096 Nov  2 02:19 .
+drwxr-xr-x 1 root    root    4096 Nov  2 02:19 ..
+-rw-r--r-- 1 appuser appuser 1395 Nov  2 02:11 .env.example
+-rw------- 1 appuser appuser 1093 Nov  2 02:09 LICENSE
+drwxr-xr-x 1 appuser appuser 4096 Nov  2 02:18 agents
+drwxr-xr-x 1 appuser appuser 4096 Nov  2 02:12 lambda
+-rw-r--r-- 1 appuser appuser  128 Nov  2 02:03 requirements.txt
+drwxr-xr-x 1 appuser appuser 4096 Sep 22 16:55 samples
+drwxr-xr-x 1 appuser appuser 4096 Nov  2 02:18 workflows
+NO_ENV_FILE

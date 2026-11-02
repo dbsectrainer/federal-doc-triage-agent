@@ -1,21 +1,26 @@
 """Tests for classifier agent."""
 
-import pytest
 from unittest.mock import Mock, patch
+
+import pytest
 
 from agents.classifier_agent import ClassifierAgent
 from workflows.state import DocumentType, SensitivityLevel, Urgency
 
 
 @pytest.fixture
-def classifier():
+def classifier(monkeypatch):
     """Create a classifier agent with mocked Bedrock client."""
+    monkeypatch.delenv("BEDROCK_MODEL_ID", raising=False)
+    monkeypatch.delenv("BEDROCK_REGION", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
     with patch("boto3.client"):
         return ClassifierAgent()
 
 
-def test_classifier_initialization():
+def test_classifier_initialization(monkeypatch):
     """Test classifier agent initialization."""
+    monkeypatch.delenv("BEDROCK_MODEL_ID", raising=False)
     with patch("boto3.client"):
         classifier = ClassifierAgent(region="us-gov-west-1")
         assert classifier.bedrock is not None
@@ -135,3 +140,130 @@ def test_classify_document_demo_mode(monkeypatch):
     assert result["urgency"] == Urgency.IMMEDIATE
     assert result["confidence_score"] > 0
     assert not classifier.bedrock.invoke_model.called
+
+
+def _mock_success_response(confidence=0.75):
+    import json
+
+    classification = json.dumps(
+        {
+            "document_type": "unknown",
+            "sensitivity_level": "unclassified",
+            "urgency": "routine",
+            "subject": "Test",
+            "summary": "Test",
+            "action_required": "Review",
+            "originating_agency": None,
+            "keywords": [],
+            "confidence_score": confidence,
+        }
+    )
+    return {
+        "body": Mock(
+            read=Mock(
+                return_value=json.dumps(
+                    {"content": [{"type": "text", "text": classification}]}
+                ).encode()
+            )
+        )
+    }
+
+
+def test_bedrock_failure_raises_without_explicit_fallback(classifier, monkeypatch):
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    monkeypatch.delenv("ALLOW_CLASSIFIER_FALLBACK", raising=False)
+    classifier.bedrock.invoke_model = Mock(side_effect=RuntimeError("bedrock down"))
+
+    with pytest.raises(RuntimeError, match="bedrock down"):
+        classifier.classify_document("DOC-FAIL", "content", "content")
+
+
+def test_explicit_local_fallback_is_used_when_enabled(classifier, monkeypatch):
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    monkeypatch.setenv("ALLOW_CLASSIFIER_FALLBACK", "true")
+    classifier.bedrock.invoke_model = Mock(side_effect=RuntimeError("bedrock down"))
+
+    result = classifier.classify_document(
+        "DOC-FALLBACK",
+        "FREEDOM OF INFORMATION ACT REQUEST",
+        "FREEDOM OF INFORMATION ACT REQUEST",
+    )
+
+    assert result["document_type"] == DocumentType.FOIA
+
+
+def test_confidence_is_clamped(classifier, monkeypatch):
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    monkeypatch.delenv("ALLOW_CLASSIFIER_FALLBACK", raising=False)
+    classifier.bedrock.invoke_model = Mock(return_value=_mock_success_response(1.5))
+
+    result = classifier.classify_document("DOC-CLAMP", "content", "content")
+
+    assert result["confidence_score"] == 1.0
+
+
+def test_prompt_wraps_untrusted_content_and_truncates(classifier, monkeypatch):
+    import json
+
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    monkeypatch.setenv("MAX_CLASSIFICATION_CHARS", "10")
+    classifier.bedrock.invoke_model = Mock(return_value=_mock_success_response())
+
+    classifier.classify_document("DOC-PROMPT", "ignored", "0123456789ABCDEF")
+
+    body = json.loads(classifier.bedrock.invoke_model.call_args.kwargs["body"])
+    prompt = body["messages"][0]["content"]
+    assert "<document>" in prompt
+    assert "untrusted data" in prompt
+    assert "0123456789ABCDEF" not in prompt
+    assert "0123456789" in prompt
+
+
+def test_output_enum_fallback_for_invalid_values(classifier, monkeypatch):
+    import json
+
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    monkeypatch.delenv("ALLOW_CLASSIFIER_FALLBACK", raising=False)
+    payload = json.dumps(
+        {
+            "document_type": "not-a-type",
+            "sensitivity_level": "top-secret",
+            "urgency": "someday",
+            "subject": None,
+            "summary": None,
+            "action_required": None,
+            "originating_agency": None,
+            "keywords": "not-a-list",
+            "confidence_score": "not-a-number",
+        }
+    )
+    classifier.bedrock.invoke_model = Mock(
+        return_value={
+            "body": Mock(
+                read=Mock(
+                    return_value=json.dumps(
+                        {"content": [{"type": "text", "text": payload}]}
+                    ).encode()
+                )
+            )
+        }
+    )
+
+    result = classifier.classify_document("DOC-INVALID", "content", "content")
+
+    assert result["document_type"] == DocumentType.UNKNOWN
+    assert result["sensitivity_level"] == SensitivityLevel.UNCLASSIFIED
+    assert result["urgency"] == Urgency.ROUTINE
+    assert result["keywords"] == []
+    assert result["confidence_score"] == 0.0
+
+
+def test_classifier_reads_environment_configuration(monkeypatch):
+    monkeypatch.setenv("BEDROCK_REGION", "us-gov-east-1")
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "env-model-id")
+    with patch("boto3.client") as client:
+        classifier = ClassifierAgent()
+
+    assert classifier.region == "us-gov-east-1"
+    assert classifier.model_id == "env-model-id"
+    client.assert_called_once_with("bedrock-runtime", region_name="us-gov-east-1")

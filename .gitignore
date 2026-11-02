@@ -79,8 +79,11 @@ npm-debug.log
 yarn-error.log
 
 # Docker
-.dockerignore
+# Keep .dockerignore tracked so image contents are reproducible.
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated screenshot render workspace
+docs/evidence/screenshots/_render/

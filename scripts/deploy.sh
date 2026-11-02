@@ -9,6 +9,7 @@ set -e
 ENVIRONMENT=production
 REGION=us-gov-west-1
 PROJECT_NAME="federal-doc-triage-agent"
+SKIP_TERRAFORM=0
 
 # Parse arguments (support both named flags and positional args)
 while [[ $# -gt 0 ]]; do
@@ -74,6 +75,12 @@ check_prerequisites() {
         exit 1
     fi
 
+    # Check zip (required to build the Lambda package)
+    if ! command -v zip &> /dev/null; then
+        log_error "zip is not installed"
+        exit 1
+    fi
+
     log_info "All prerequisites satisfied"
 }
 
@@ -109,23 +116,24 @@ deploy_infrastructure() {
 build_lambda_packages() {
     log_info "Building Lambda deployment packages..."
 
-    # Create temp directory for build
-    mkdir -p build
+    PACKAGE_DIR="build/lambda_package"
+    rm -rf build
+    mkdir -p "$PACKAGE_DIR"
 
-    # Copy source files
-    cp -r agents build/
-    cp -r workflows build/
-    cp requirements.txt build/
+    # Copy source files, including the handler module itself.
+    cp -r agents workflows lambda "$PACKAGE_DIR/"
+    cp requirements.txt "$PACKAGE_DIR/"
 
-    # Install dependencies in build directory
-    pip install -r requirements.txt -t build/ --quiet
+    # Install dependencies into the package root so the zip is self-contained.
+    python3 -m pip install -r requirements.txt -t "$PACKAGE_DIR" --quiet
 
-    # Create intake handler package
-    cd build
-    zip -r ../lambda_intake_handler.zip lambda/intake_handler.py agents/ workflows/ requirements.txt
-    cd ..
+    # Create intake handler package from the package root.
+    (
+        cd "$PACKAGE_DIR"
+        zip -qr ../../lambda_intake_handler.zip . -x '*.pyc' -x '__pycache__/*'
+    )
 
-    log_info "Lambda packages built successfully"
+    log_info "Lambda package built: lambda_intake_handler.zip"
 }
 
 # Deploy Lambda functions
@@ -139,8 +147,10 @@ deploy_lambda_functions() {
         --output text)
 
     if [ -z "$LAMBDA_FUNCTION" ]; then
-        log_warn "Lambda function not found. Ensure Terraform deployment completed successfully."
-        return
+        log_error "Lambda function '${PROJECT_NAME}-intake' was not found."
+        log_error "The current Terraform configuration provisions the data/security baseline only; it does not create the Lambda function."
+        log_error "See README.md 'Deployment status' before using this script in an AWS account."
+        exit 1
     fi
 
     # Update function code

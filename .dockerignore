@@ -1,0 +1,58 @@
+# Git and local metadata
+.git
+.gitignore
+.claude
+.github
+
+# Secrets and local configuration
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials
+aws_config
+
+# Python virtualenvs and caches
+.venv
+venv
+env
+__pycache__
+*.py[cod]
+.pytest_cache
+.coverage
+htmlcov
+.mypy_cache
+.ruff_cache
+*.egg-info
+
+# Build and demo output
+build
+dist
+*_result.json
+demo_output
+
+# Terraform state and secrets
+.terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
+# Tests and docs evidence are not needed in the runtime image
+tests
+docs
+scripts
+test_local.py
+requirements-dev.txt
+pyproject.toml
+README.md
+SECURITY.md
+review-*.md
+ROADMAP.md
+FEDRAMP-ALIGNMENT.md
+terraform
+
+# Docker
+Dockerfile
+.dockerignore

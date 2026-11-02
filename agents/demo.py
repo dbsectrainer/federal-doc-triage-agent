@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -12,24 +13,33 @@ load_dotenv()
 # Demo runner works without AWS credentials
 os.environ["DEMO_MODE"] = "true"
 os.environ["USE_COMPREHEND"] = "false"
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(levelname)s %(name)s: %(message)s",
+)
+# Avoid noisy SDK/credential-provider logs in the CLI demo.  Application logs
+# remain at the configured LOG_LEVEL.
+logging.getLogger("botocore").setLevel(logging.WARNING)
+logging.getLogger("boto3").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-from agents.supervisor import SupervisorAgent
+from agents.supervisor import SupervisorAgent  # noqa: E402  (must follow demo env setup)
 
 
-async def run_demo(document_path: str):
+async def run_demo(document_path: str) -> int:
     """Run a demo triage workflow with a sample document."""
 
     # Read sample document
     doc_path = Path(document_path)
     if not doc_path.exists():
         print(f"Error: Document not found at {document_path}")
-        sys.exit(1)
+        return 1
 
-    with open(doc_path, "r") as f:
+    with open(doc_path, "r", encoding="utf-8") as f:
         content = f.read()
 
     print(f"\n{'='*60}")
-    print(f"Federal Document Triage Agent - Demo")
+    print("Federal Document Triage Agent - Demo")
     print(f"{'='*60}")
     print(f"Processing: {doc_path.name}")
     print(f"Content length: {len(content)} bytes\n")
@@ -72,10 +82,14 @@ async def run_demo(document_path: str):
         if final_state["routing"]:
             routing = final_state["routing"]
             print(f"Primary Queue:    {routing['primary_queue'].value}")
-            print(f"Backup Queue:     {routing['backup_queue'].value if routing['backup_queue'] else 'None'}")
+            print(
+                "Backup Queue:     "
+                f"{routing['backup_queue'].value if routing['backup_queue'] else 'None'}"
+            )
             print(f"Primary Reviewer: {routing['primary_reviewer_id']}")
             print(f"Backup Reviewer:  {routing['backup_reviewer_id'] or 'None'}")
             print(f"SLA Deadline:     {routing['sla_deadline']}")
+            print(f"Rule Applied:     {routing['rule_applied']}")
 
         print(f"\n{'='*60}")
         print("PII DETECTION")
@@ -96,19 +110,28 @@ async def run_demo(document_path: str):
 
         # Save full state to JSON
         output_file = doc_path.stem + "_result.json"
-        with open(output_file, "w") as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             # Convert enums to strings for JSON serialization
             json_state = json.loads(json.dumps(final_state, default=str))
             json.dump(json_state, f, indent=2)
 
         print(f"\nFull result saved to: {output_file}")
+        print(f"Audit events: {len(final_state.get('audit_trail', []))} "
+              f"(persistence: {final_state.get('audit_persistence_mode')})")
         print(f"{'='*60}\n")
+
+        if final_state.get("error") or not final_state.get("processing_complete"):
+            print("DEMO RESULT: FAIL")
+            return 1
+
+        print("DEMO RESULT: PASS")
+        return 0
 
     except Exception as e:
         print(f"Error processing document: {e}")
         import traceback
         traceback.print_exc()
-        sys.exit(1)
+        return 1
 
 
 if __name__ == "__main__":
@@ -117,4 +140,4 @@ if __name__ == "__main__":
         print("\nExample: python -m agents.demo samples/sample_foia_request.txt")
         sys.exit(1)
 
-    asyncio.run(run_demo(sys.argv[1]))
+    sys.exit(asyncio.run(run_demo(sys.argv[1])))

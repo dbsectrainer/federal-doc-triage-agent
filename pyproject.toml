@@ -1,0 +1,17 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "strict"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = [
+    ".git",
+    ".venv",
+    "build",
+    "terraform",
+]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "W", "I"]

@@ -1,212 +1,186 @@
 # Quick Start Guide
 
+This is a **CLI/Lambda backend**. There is no web server, homepage, or HTTP
+endpoint to open in a browser. The fastest verified path is the local demo,
+which needs no AWS credentials.
+
 ## Prerequisites
 
-- Python 3.11+
-- AWS CLI configured with GovCloud credentials
-- AWS Bedrock access (Claude 3 Sonnet model)
-- Docker (optional, for containerized deployment)
+- Python **3.12+**
+- `pip`
+- Optional: AWS CLI + credentials for live Bedrock/Comprehend/Textract/DynamoDB
+- Optional: Docker for the container build
+- Optional: Terraform >= 1.0 for infrastructure validation
 
-## Local Development
-
-### 1. Clone & Setup
+## 1. Set Up
 
 ```bash
 git clone https://github.com/dbsectrainer/federal-doc-triage-agent.git
 cd federal-doc-triage-agent
 
-# Create virtual environment
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
-# Install dependencies
 pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
-### 2. Configure Environment
+## 2. Configure (Optional for Demo)
 
 ```bash
 cp .env.example .env
-# Edit .env with your AWS credentials and region
 ```
 
-### 3. Run Demo Workflow
+The demo runner loads `.env` and then forces:
+
+```text
+DEMO_MODE=true
+USE_COMPREHEND=false
+```
+
+You do not need AWS keys for the demo. For live mode, set `DEMO_MODE=false` and
+configure AWS credentials and `AWS_REGION`/`BEDROCK_REGION`. See the environment
+table in [../README.md](../README.md#environment-configuration).
+
+## 3. Run the Demo
 
 ```bash
-# Process a sample FOIA request
 python -m agents.demo samples/sample_foia_request.txt
-
-# Or process any of the sample documents:
 python -m agents.demo samples/sample_contract_memo.txt
 python -m agents.demo samples/sample_incident_report.txt
 python -m agents.demo samples/sample_executive_correspondence.txt
 ```
 
-### 4. Expected Output
+Expected output includes:
 
-The demo will:
-
-1. **Intake Phase**: Detect PII (emails, phone numbers, SSNs) and redact them
-2. **Classification Phase**: Use Bedrock to classify the document by type, sensitivity, and urgency
-3. **Routing Phase**: Assign to appropriate queue (contracting officer, legal counsel, etc.)
-4. **Approval Phase**: Mark for human review with SLA deadline
-5. **Audit Phase**: Generate compliance audit trail
-
-Results are saved to `<document>_result.json` with full workflow state.
-
-## Running Tests
-
-```bash
-# Run all tests
-pytest tests/ -v
-
-# Run with coverage
-pytest tests/ --cov=agents --cov=workflows
-
-# Run specific test file
-pytest tests/test_classifier.py -v
+```text
+WORKFLOW STATUS
+document_id................... DEMO-SAMPLE_FOIA_REQUEST
+status........................ in_review
+document_type................. foia
+sensitivity................... unclassified
+...
+assigned_queue................ legal_counsel
+...
+DEMO RESULT: PASS
 ```
 
-## Docker Deployment
+The CLI writes `<sample>_result.json` in the current directory and exits non-zero
+if the workflow fails or is incomplete.
 
-### Build Container
+### Verified demo outcomes
+
+| Sample | Type | Sensitivity | Queue | Approval |
+| --- | --- | --- | --- | --- |
+| FOIA request | `foia` | `unclassified` | `legal_counsel` | `in_review` |
+| Contract memo | `contract` | `sbu` | `contracting_officer` | `in_review` |
+| Incident report | `incident_report` | `cui` | `security_team` | `in_review` |
+| Executive correspondence | `executive_correspondence` | `fouo` | `chief_of_staff` | `in_review` |
+
+Sensitive documents are never auto-approved, even at high confidence.
+
+## 4. Run the Tests
+
+```bash
+python -m pytest tests/ -v --cov=agents --cov=workflows --cov-report=term-missing
+python test_local.py
+ruff check agents workflows tests lambda scripts test_local.py
+python -m pip_audit -r requirements.txt
+```
+
+At the time of the audit: **73 tests passed**, coverage ~79%, lint clean, no
+known dependency vulnerabilities. See
+[`evidence/test-results/`](evidence/test-results/).
+
+## 5. Run in Docker
 
 ```bash
 docker build -t federal-doc-triage-agent .
+docker run --rm federal-doc-triage-agent
 ```
 
-### Run Demo in Container
+Health check (the CLI has no HTTP server):
 
 ```bash
-docker run --rm \
-  -e AWS_REGION=us-gov-west-1 \
-  -e AWS_PROFILE=default \
-  -v ~/.aws:/home/appuser/.aws:ro \
-  federal-doc-triage-agent
+docker run -d --name triage federal-doc-triage-agent sleep 60
+docker inspect --format '{{.State.Health.Status}}' triage
+# healthy
+docker rm -f triage
 ```
 
-### Run with Local Sample
+## 6. Terraform Validation
 
 ```bash
-docker run --rm \
-  -e AWS_REGION=us-gov-west-1 \
-  -v ~/.aws:/home/appuser/.aws:ro \
-  -v $(pwd)/samples:/app/samples:ro \
-  federal-doc-triage-agent \
-  python -m agents.demo samples/sample_foia_request.txt
-```
-
-## AWS GovCloud Deployment
-
-### 1. Deploy Infrastructure
-
-```bash
+terraform fmt -check -recursive terraform
 cd terraform
-cp govcloud.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your values
-
-terraform init
-terraform plan
-terraform apply
+terraform init -backend=false
+terraform validate
 ```
 
-### 2. Deploy Lambda Functions
+`validate` succeeds. `terraform apply` was **not** performed in this audit, and
+the configuration does not create the Lambda function/API Gateway/SNS workflow.
+See the deployment status in [../README.md](../README.md#aws-deployment-status).
 
-```bash
-cd ..
-./scripts/deploy.sh --env production --region us-gov-west-1
+## Expected Data Flow
+
+```text
+Document text
+  → normalize + PII redaction
+  → classification (local rules in demo, Bedrock in live mode)
+  → routing (exact rule → document-type default → global default)
+  → approval (unclassified + confidence > 0.85 → auto; else human review)
+  → escalation check (single-run no-op unless deadline restored)
+  → audit trail (DynamoDB in live mode; in-memory for demo)
 ```
-
-### 3. Configure S3 Trigger
-
-Documents uploaded to the S3 intake bucket will automatically trigger the workflow.
-
-```bash
-# Upload a test document
-aws s3 cp samples/sample_foia_request.txt \
-  s3://your-intake-bucket/documents/ \
-  --region us-gov-west-1
-```
-
-## Architecture Overview
-
-```
-Document Intake (S3 / API)
-        ↓
-  PII Redaction (AWS Comprehend)
-        ↓
-  Classification (AWS Bedrock - Claude 3 Sonnet)
-        ↓
-  Routing Rules Engine
-        ↓
-  Queue Assignment + SLA Calculation
-        ↓
-  Approval Workflow (Human Review)
-        ↓
-  Compliance Audit Logging (CloudTrail + DynamoDB)
-        ↓
-  Archive (S3 with Object Lock - 7 year retention)
-```
-
-## Document Types Supported
-
-- **Contract/Procurement** — Route to Contracting Officer
-- **FOIA Request** — Route to Legal Counsel
-- **Policy/Memo** — Route to Policy Office
-- **Incident Report** — Route to Security Team (Emergency)
-- **Personnel Action** — Route to HR Office
-- **Financial** — Route to Finance Office
-- **Executive Correspondence** — Route to Chief of Staff
-- **Legal** — Route to Legal Counsel
 
 ## Troubleshooting
 
-### Bedrock Access Error
+### `Error: Document not found at ...`
 
+Run from the repository root, or pass an absolute path. The demo resolves the
+path relative to the current working directory.
+
+### `ModuleNotFoundError`
+
+Activate the virtual environment and install both requirements files:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
 ```
-Error: Access Denied to Bedrock model
-```
 
-**Solution:** Ensure your AWS IAM role has `bedrock:InvokeModel` permission for the Claude 3 Sonnet model in your region.
+### Bedrock `AccessDeniedException`
 
-### PII Detection Not Working
+The demo does not call Bedrock. In live mode, confirm the model ID is enabled in
+your region and the caller has `bedrock:InvokeModel`. By design, a Bedrock
+failure now raises instead of silently substituting local rules; set
+`ALLOW_CLASSIFIER_FALLBACK=true` only if you explicitly accept that trade-off.
 
-```
-Error: AWS Comprehend service not available
-```
+### `NoCredentialsError` / DynamoDB errors in live mode
 
-**Solution:** AWS Comprehend may not be available in all regions. Check region availability and fall back to regex-based detection by setting `USE_COMPREHEND=false` in `.env`.
+Provide AWS credentials (or an instance/task role) and a reachable region. In
+demo mode persistence is intentionally skipped and
+`audit_persistence_mode=in_memory_demo`.
 
-### Workflow Stuck in Approval Phase
+### Comprehend unavailable
 
-The approval phase is designed to wait for human decision. In demo/test mode, it returns immediately with `PENDING` status. In production, it integrates with Step Functions and SNS notifications.
+Set `USE_COMPREHEND=false` to use regex detection. The code also falls back to
+regex automatically if Comprehend raises or the document exceeds the synchronous
+100 KB limit. This is a degraded mode, not equivalent to an ML PII engine.
 
-## Environment Variables
+### `deploy.sh` stops with "Lambda function ... was not found"
 
-See `.env.example` for all available configuration options:
+This is expected for the current repository: Terraform provisions the
+data/security baseline only. The deploy script no longer reports success when
+the Lambda function is absent. Complete the Lambda/API infrastructure first.
 
-| Variable                  | Purpose                   | Example                                 |
-| ------------------------- | ------------------------- | --------------------------------------- |
-| AWS_REGION                | AWS region for deployment | us-gov-west-1                           |
-| BEDROCK_MODEL_ID          | Claude model version      | anthropic.claude-3-sonnet-20240229-v1:0 |
-| MAX_DOCUMENT_SIZE_MB      | Max document size         | 100                                     |
-| USE_COMPREHEND            | Enable AWS Comprehend     | true                                    |
-| DEFAULT_SLA_PRIORITY_DAYS | SLA for priority docs     | 5                                       |
+## Architecture and Evidence
 
-## Next Steps
-
-1. Review `FEDRAMP-ALIGNMENT.md` for security control mappings
-2. Explore `docs/` directory for detailed architecture documentation
-3. Run test suite: `pytest tests/ -v`
-4. Deploy to GovCloud: `terraform apply` in `terraform/` directory
-5. Configure S3 intake bucket with Lambda trigger
-
-## Support & Questions
-
-For issues, questions, or contributions, open an issue on GitHub:
-[https://github.com/dbsectrainer/federal-doc-triage-agent/issues](https://github.com/dbsectrainer/federal-doc-triage-agent/issues)
+- [ARCHITECTURE.md](ARCHITECTURE.md) — implemented components and limitations
+- [evidence/verification-report.md](evidence/verification-report.md) — audit,
+  fixes, commands, screenshots, residual risks
+- [../README.md](../README.md) — full project overview
 
 ---
 
-**Last Updated:** 2026-05-06  
-**FedRAMP Alignment:** Moderate Baseline
+**Last verified:** 2026-11-01

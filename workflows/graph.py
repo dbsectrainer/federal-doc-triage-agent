@@ -1,16 +1,27 @@
 """LangGraph workflow definition for federal document triage."""
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
 
-from workflows.state import TriageState, ApprovalStatus
 from workflows.nodes import (
-    intake_node,
-    classify_node,
-    route_node,
     approval_node,
-    escalation_node,
     audit_node,
+    classify_node,
+    escalation_node,
+    intake_node,
+    route_node,
 )
+from workflows.state import ApprovalStatus, TriageState
+
+MAX_NODE_RETRIES = 3
+
+
+def _retry_or_continue(state: TriageState, node: str, next_node: str) -> str:
+    """Retry the failed node, or stop the pipeline when retries are exhausted."""
+    if state.get("error"):
+        if state.get("retry_count", 0) <= MAX_NODE_RETRIES:
+            return node
+        return "audit"
+    return next_node
 
 
 def build_triage_graph():
@@ -21,9 +32,14 @@ def build_triage_graph():
     1. Intake: Parse document, detect & redact PII
     2. Classify: Determine document type, sensitivity, urgency
     3. Route: Assign to appropriate queue and reviewer
-    4. Approval: Wait for human decision (approve/reject/delegate)
-    5. Escalation: Monitor SLA and escalate if overdue
-    6. Audit: Log all decisions for compliance
+    4. Approval: Auto-approve eligible documents or require human review
+    5. Escalation: Check SLA (no-op within a single run)
+    6. Audit: Persist the audit trail and finalize the workflow
+
+    Each processing node may be retried up to ``MAX_NODE_RETRIES`` times
+    (four total attempts).  When the retry budget is exhausted the graph goes
+    directly to audit, preserving the error and marking the workflow incomplete
+    instead of processing empty or partially populated state.
     """
 
     graph = StateGraph(TriageState)
@@ -36,56 +52,27 @@ def build_triage_graph():
     graph.add_node("escalation", escalation_node)
     graph.add_node("audit", audit_node)
 
-    # Define conditional edges for error retry and normal flow
-    def intake_router(state):
-        """Route from intake: retry on error or proceed to classify."""
-        max_retries = 3
-        if state.get("error") and state.get("retry_count", 0) < max_retries:
-            return "intake"
-        else:
-            return "classify"
-
-    def classify_router(state):
-        """Route from classify: retry on error or proceed to route."""
-        max_retries = 3
-        if state.get("error") and state.get("retry_count", 0) < max_retries:
-            return "classify"
-        else:
-            return "route"
-
-    def route_router(state):
-        """Route from route: retry on error or proceed to approval."""
-        max_retries = 3
-        if state.get("error") and state.get("retry_count", 0) < max_retries:
-            return "route"
-        else:
-            return "approval"
-
-    # Add conditional edges with retry logic
+    # Conditional edges implement per-node retries and failure short-circuiting.
     graph.add_conditional_edges(
         "intake",
-        intake_router,
+        lambda state: _retry_or_continue(state, "intake", "classify"),
     )
     graph.add_conditional_edges(
         "classify",
-        classify_router,
+        lambda state: _retry_or_continue(state, "classify", "route"),
     )
     graph.add_conditional_edges(
         "route",
-        route_router,
+        lambda state: _retry_or_continue(state, "route", "approval"),
     )
 
-    # Approval can go to escalation (for IN_REVIEW) or audit (for APPROVED/REJECTED)
-    def approval_routing(state):
-        """Route based on approval status.
-
-        - IN_REVIEW documents go to escalation for SLA monitoring
-        - APPROVED, REJECTED, DELEGATED documents go directly to audit
-        """
+    # Approval goes to escalation for IN_REVIEW documents or audit otherwise.
+    def approval_routing(state: TriageState) -> str:
+        if state.get("error"):
+            return "audit"
         if state["approval_status"] == ApprovalStatus.IN_REVIEW:
             return "escalation"
-        else:
-            return "audit"
+        return "audit"
 
     graph.add_conditional_edges(
         "approval",

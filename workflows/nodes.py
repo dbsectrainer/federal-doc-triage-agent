@@ -1,21 +1,57 @@
 """Individual node implementations for the triage workflow."""
 
-import os
+from __future__ import annotations
+
 import logging
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
 
-from agents.intake_agent import IntakeAgent
 from agents.classifier_agent import ClassifierAgent
+from agents.intake_agent import IntakeAgent
 from agents.router_agent import RouterAgent
-from agents.auditor_agent import AuditorAgent
-from workflows.state import TriageState, ApprovalStatus
+from workflows.audit_context import get_auditor
+from workflows.state import (
+    ApprovalStatus,
+    SensitivityLevel,
+    TriageState,
+)
 
+logger = logging.getLogger(__name__)
 
-# Singleton agent instances
+# Agent instances are stateless apart from the auditor, which is scoped per
+# workflow invocation in ``workflows.audit_context``.
 intake_agent = IntakeAgent()
 classifier_agent = ClassifierAgent()
 router_agent = RouterAgent()
-auditor_agent = AuditorAgent()
+
+# Only unclassified documents may be processed without a human decision.
+SENSITIVE_LEVELS = {
+    SensitivityLevel.CONTROLLED_UNCLASSIFIED,
+    SensitivityLevel.SENSITIVE_BUT_UNCLASSIFIED,
+    SensitivityLevel.FOR_OFFICIAL_USE_ONLY,
+}
+
+DEFAULT_AUTO_APPROVAL_CONFIDENCE = 0.85
+
+
+def _demo_mode() -> bool:
+    return os.environ.get("DEMO_MODE", "").lower() in ("true", "1", "yes")
+
+
+def _auto_approval_threshold() -> float:
+    raw = os.environ.get(
+        "AUTO_APPROVAL_CONFIDENCE_THRESHOLD", str(DEFAULT_AUTO_APPROVAL_CONFIDENCE)
+    )
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid AUTO_APPROVAL_CONFIDENCE_THRESHOLD=%r; using %.2f",
+            raw,
+            DEFAULT_AUTO_APPROVAL_CONFIDENCE,
+        )
+        return DEFAULT_AUTO_APPROVAL_CONFIDENCE
+    return min(max(value, 0.0), 1.0)
 
 
 async def intake_node(state: TriageState) -> TriageState:
@@ -27,6 +63,7 @@ async def intake_node(state: TriageState) -> TriageState:
     - pii_detection: Detection metadata
     - error: Any processing errors
     """
+    auditor = get_auditor()
     try:
         # Normalize document content
         normalized_content = intake_agent.normalize_document(state["document_content"])
@@ -37,7 +74,7 @@ async def intake_node(state: TriageState) -> TriageState:
         )
 
         # Log intake event
-        auditor_agent.log_event(
+        auditor.log_event(
             agent="intake_agent",
             action="process_document",
             outcome="success",
@@ -54,12 +91,13 @@ async def intake_node(state: TriageState) -> TriageState:
             "document_content_redacted": redacted_content,
             "pii_detection": pii_detection,
             "error": None,
+            "retry_count": 0,
         }
-    except Exception as e:
-        auditor_agent.log_error(state["document_id"], "intake_agent", str(e))
+    except Exception as exc:
+        auditor.log_error(state["document_id"], "intake_agent", str(exc))
         return {
             **state,
-            "error": f"Intake processing failed: {str(e)}",
+            "error": f"Intake processing failed: {exc}",
             "retry_count": state["retry_count"] + 1,
         }
 
@@ -72,6 +110,7 @@ async def classify_node(state: TriageState) -> TriageState:
     - classification: Classification result from Bedrock
     - error: Any classification errors
     """
+    auditor = get_auditor()
     try:
         classification = classifier_agent.classify_document(
             document_id=state["document_id"],
@@ -80,7 +119,7 @@ async def classify_node(state: TriageState) -> TriageState:
         )
 
         # Log classification event
-        auditor_agent.log_classification(
+        auditor.log_classification(
             document_id=state["document_id"],
             document_type=classification["document_type"].value,
             confidence_score=classification["confidence_score"],
@@ -90,12 +129,13 @@ async def classify_node(state: TriageState) -> TriageState:
             **state,
             "classification": classification,
             "error": None,
+            "retry_count": 0,
         }
-    except Exception as e:
-        auditor_agent.log_error(state["document_id"], "classifier_agent", str(e))
+    except Exception as exc:
+        auditor.log_error(state["document_id"], "classifier_agent", str(exc))
         return {
             **state,
-            "error": f"Classification failed: {str(e)}",
+            "error": f"Classification failed: {exc}",
             "retry_count": state["retry_count"] + 1,
         }
 
@@ -108,6 +148,7 @@ async def route_node(state: TriageState) -> TriageState:
     - routing: Routing decision with queue and SLA
     - error: Any routing errors
     """
+    auditor = get_auditor()
     try:
         if not state["classification"]:
             raise ValueError("No classification available for routing")
@@ -118,7 +159,7 @@ async def route_node(state: TriageState) -> TriageState:
         )
 
         # Log routing event
-        auditor_agent.log_routing(
+        auditor.log_routing(
             document_id=state["document_id"],
             primary_queue=routing["primary_queue"].value,
             backup_queue=routing["backup_queue"].value if routing["backup_queue"] else None,
@@ -129,41 +170,50 @@ async def route_node(state: TriageState) -> TriageState:
             **state,
             "routing": routing,
             "error": None,
+            "retry_count": 0,
         }
-    except Exception as e:
-        auditor_agent.log_error(state["document_id"], "router_agent", str(e))
+    except Exception as exc:
+        auditor.log_error(state["document_id"], "router_agent", str(exc))
         return {
             **state,
-            "error": f"Routing failed: {str(e)}",
+            "error": f"Routing failed: {exc}",
             "retry_count": state["retry_count"] + 1,
         }
 
 
 async def approval_node(state: TriageState) -> TriageState:
     """
-    Approval node: Auto-approve high-confidence docs, mark others for review.
+    Approval node: auto-approve only high-confidence *unclassified* documents.
 
-    Auto-approval heuristic: If classification confidence > 0.85, auto-approve.
-    Otherwise, mark as IN_REVIEW to await human decision.
-
-    In production, IN_REVIEW documents would integrate with Step Functions to wait
-    for SNS notification of approval decision.
+    Sensitive documents (CUI, SBU, FOUO) always require a human decision,
+    regardless of the classifier's confidence.  This is deliberately stricter
+    than a confidence-only threshold: a misclassification must not be able to
+    auto-approve a controlled document.
 
     Updates:
-    - approval_status: APPROVED if confidence > 0.85, else IN_REVIEW
+    - approval_status: APPROVED for eligible documents, otherwise IN_REVIEW
     - approval_reviewer: Assigned reviewer
     - approval_timestamp: Set if auto-approved
     """
+    auditor = get_auditor()
     try:
         if not state["classification"]:
             raise ValueError("No classification available for approval")
 
-        confidence = state["classification"]["confidence_score"]
+        classification = state["classification"]
+        confidence = float(classification["confidence_score"])
+        try:
+            sensitivity = SensitivityLevel(classification["sensitivity_level"])
+        except (ValueError, TypeError):
+            # Unknown sensitivity is treated as controlled: never auto-approve.
+            sensitivity = SensitivityLevel.CONTROLLED_UNCLASSIFIED
+        is_sensitive = sensitivity in SENSITIVE_LEVELS
+        threshold = _auto_approval_threshold()
 
-        # Auto-approve high-confidence documents
-        if confidence > 0.85:
+        # Auto-approve only unclassified documents with high confidence.
+        if not is_sensitive and confidence > threshold:
             approval_timestamp = datetime.now(timezone.utc).isoformat()
-            auditor_agent.log_approval_decision(
+            auditor.log_approval_decision(
                 document_id=state["document_id"],
                 reviewer_id="auto-approval-bot",
                 decision="approved",
@@ -176,20 +226,41 @@ async def approval_node(state: TriageState) -> TriageState:
                 "approval_timestamp": approval_timestamp,
                 "approval_notes": f"Auto-approved (confidence: {confidence:.2f})",
                 "error": None,
+                "retry_count": 0,
             }
-        else:
-            # Low-confidence documents require human review
-            return {
-                **state,
-                "approval_status": ApprovalStatus.IN_REVIEW,
-                "approval_reviewer": state["routing"]["primary_reviewer_id"] if state["routing"] else None,
-                "error": None,
-            }
-    except Exception as e:
-        auditor_agent.log_error(state["document_id"], "approval_agent", str(e))
+
+        # Everything else needs a human reviewer.
+        reviewer = state["routing"]["primary_reviewer_id"] if state["routing"] else None
+        reason = (
+            f"sensitivity {sensitivity.value} requires human review"
+            if is_sensitive
+            else f"confidence {confidence:.2f} does not exceed {threshold:.2f}"
+        )
+        auditor.log_event(
+            agent="approval_agent",
+            action="require_human_review",
+            outcome="pending",
+            metadata={
+                "document_id": state["document_id"],
+                "reviewer_id": reviewer,
+                "reason": reason,
+                "confidence_score": confidence,
+                "sensitivity_level": sensitivity.value,
+            },
+        )
         return {
             **state,
-            "error": f"Approval initiation failed: {str(e)}",
+            "approval_status": ApprovalStatus.IN_REVIEW,
+            "approval_reviewer": reviewer,
+            "approval_notes": f"Human review required: {reason}",
+            "error": None,
+            "retry_count": 0,
+        }
+    except Exception as exc:
+        auditor.log_error(state["document_id"], "approval_agent", str(exc))
+        return {
+            **state,
+            "error": f"Approval initiation failed: {exc}",
             "retry_count": state["retry_count"] + 1,
         }
 
@@ -198,30 +269,32 @@ async def escalation_node(state: TriageState) -> TriageState:
     """
     Escalation node: Check for SLA breaches and escalate if overdue.
 
-    NOTE: SLA check with 1-hour grace period to allow buffer before escalation.
-    TODO: Multi-run SLA check requires state persistence across invocations.
-    Current implementation only works for single-run workflows. For production,
-    implement SLA tracking in DynamoDB to check against deadline from routing,
-    not just when this node executes.
+    NOTE: A single workflow run creates the SLA deadline immediately before
+    this check, so it only escalates if the deadline was restored from a
+    previous run (for example from DynamoDB).  The current implementation does
+    not persist/reload workflow state between runs; multi-run SLA tracking is
+    tracked in ROADMAP.md.
 
     Updates:
     - escalation_count: Incremented if escalated
     - approval_status: Updated to ESCALATED if overdue
     """
+    auditor = get_auditor()
     try:
         if not state["routing"]:
             return state
 
         sla_deadline = datetime.fromisoformat(state["routing"]["sla_deadline"])
         now = datetime.now(timezone.utc)
+        if sla_deadline.tzinfo is None:
+            sla_deadline = sla_deadline.replace(tzinfo=timezone.utc)
         grace_period_hours = 1
 
         # Check if current time exceeds deadline + grace period
-        from datetime import timedelta
         escalation_threshold = sla_deadline + timedelta(hours=grace_period_hours)
 
         if now > escalation_threshold:
-            auditor_agent.log_escalation(
+            auditor.log_escalation(
                 document_id=state["document_id"],
                 reason=f"SLA deadline exceeded (with {grace_period_hours}h grace period)",
                 escalated_to=state["routing"]["backup_reviewer_id"] or "escalation_queue",
@@ -234,78 +307,76 @@ async def escalation_node(state: TriageState) -> TriageState:
             }
 
         return state
-    except Exception as e:
-        auditor_agent.log_error(state["document_id"], "escalation_agent", str(e))
+    except Exception as exc:
+        auditor.log_error(state["document_id"], "escalation_agent", str(exc))
         return {
             **state,
-            "error": f"Escalation check failed: {str(e)}",
+            "error": f"Escalation check failed: {exc}",
         }
 
 
 async def audit_node(state: TriageState) -> TriageState:
     """
-    Audit node: Persist audit trail and finalize workflow.
+    Audit node: persist the audit trail, then finalize the workflow.
 
-    Attempts to persist all audit events to DynamoDB for compliance tracking.
-    If persistence fails, audit trail is still returned in state for fallback handling.
+    In DEMO_MODE the trail is returned in state but not written to DynamoDB.
+    In production a failed persistence attempt is a workflow failure: the
+    document is not marked complete because its compliance record is missing.
 
     Updates:
-    - processing_complete: Mark workflow as complete
-    - audit_trail: Store all audit events
-    - error: Any persistence errors (non-fatal)
+    - processing_complete: True only when no error occurred and the audit
+      record was either persisted or intentionally kept in memory for a demo
+    - audit_trail: Complete audit events for this document only
+    - audit_persisted: Whether DynamoDB accepted the events
+    - error: Prior error is preserved; persistence errors are added
     """
-    try:
-        # Get current audit trail
-        events = auditor_agent.get_audit_trail()
+    auditor = get_auditor()
+    prior_error = state.get("error")
+    events_before_finalization = len(auditor.get_audit_trail())
+    approval_status = state["approval_status"]
+    approval_status_value = getattr(approval_status, "value", str(approval_status))
 
-        # Log finalization event
-        auditor_agent.log_event(
-            agent="audit_agent",
-            action="finalize_workflow",
-            outcome="success",
-            metadata={
-                "document_id": state["document_id"],
-                "approval_status": state["approval_status"].value,
-                "event_count": len(events),
-            },
+    auditor.log_event(
+        agent="audit_agent",
+        action="finalize_workflow",
+        outcome="failure" if prior_error else "success",
+        metadata={
+            "document_id": state["document_id"],
+            "approval_status": approval_status_value,
+            "event_count": events_before_finalization,
+            "workflow_error": prior_error,
+        },
+    )
+
+    demo_mode = _demo_mode()
+    if demo_mode:
+        persistence_success = False
+        persistence_mode = "in_memory_demo"
+    else:
+        table_name = os.environ.get(
+            "AUDIT_DYNAMODB_TABLE",
+            os.environ.get("AUDIT_TABLE_NAME", "document-triage-audit"),
         )
+        persistence_success = auditor.persist_to_dynamodb(table_name)
+        persistence_mode = "dynamodb"
+        if not persistence_success:
+            logger.error(
+                "Failed to persist audit trail to DynamoDB table '%s'", table_name
+            )
 
-        # Attempt to persist to DynamoDB (non-blocking; skipped in local demo mode)
-        demo_mode = os.environ.get("DEMO_MODE", "").lower() in ("true", "1", "yes")
-        if demo_mode:
-            persistence_success = True
-        else:
-            table_name = os.environ.get("AUDIT_TABLE_NAME", "federal-doc-triage-audit-trail")
-            persistence_success = auditor_agent.persist_to_dynamodb(table_name)
-            if not persistence_success:
-                logging.warning(f"Failed to persist audit trail to DynamoDB table '{table_name}'")
+    audit_trail = list(auditor.get_audit_trail())
+    auditor.clear_audit_trail()
 
-        # Build audit trail for state
-        audit_trail = [
-            {
-                "event_id": event["event_id"],
-                "timestamp": event["timestamp"],
-                "event_type": event["event_type"],
-                "agent": event["agent"],
-                "action": event["action"],
-                "outcome": event["outcome"],
-                "metadata": event["metadata"],
-            }
-            for event in auditor_agent.get_audit_trail()
-        ]
+    error = prior_error
+    if not demo_mode and not persistence_success:
+        persistence_error = "Audit persistence failed: audit trail was not written to DynamoDB"
+        error = f"{prior_error}; {persistence_error}" if prior_error else persistence_error
 
-        # Clear in-memory trail after persistence
-        auditor_agent.clear_audit_trail()
-
-        return {
-            **state,
-            "audit_trail": audit_trail,
-            "processing_complete": True,
-            "audit_persisted": persistence_success,
-            "error": None,
-        }
-    except Exception as e:
-        return {
-            **state,
-            "error": f"Audit finalization failed: {str(e)}",
-        }
+    return {
+        **state,
+        "audit_trail": audit_trail,
+        "processing_complete": error is None,
+        "audit_persisted": persistence_success,
+        "audit_persistence_mode": persistence_mode,
+        "error": error,
+    }
